@@ -84,4 +84,4 @@ Runs as a seperate process, embedded using Xlib.
 
 ---
 
-__Why?__ I like Thunar, but it lacks Vim integration and feels sluggish. Pure terminal Vim file managers support neither drag-and-drop nor reliable image previews without specific terminal features. Few also integrate with D-Bus. With Lizaveta I want to address these common shortcomings, and great something *that just works*.
+__Why?__ I like Thunar, but it lacks Vim integration and feels sluggish. Pure terminal Vim file managers support neither drag-and-drop nor reliable image previews without specific terminal features. Few also integrate with D-Bus. With Lizaveta I want to address these common shortcomings, and create something *that just works*.
