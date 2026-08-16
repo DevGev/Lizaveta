@@ -1,0 +1,8 @@
+build/
+.xmake/
+*.o
+*.obj
+*.out
+.cache
+.ccls
+compile_commands.json
