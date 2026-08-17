@@ -6,6 +6,8 @@ add_rules("plugin.compile_commands.autoupdate")
 
 add_moduledirs("xmake")
 
+includes("config")
+
 option("icons")
     set_default(false)
     set_showmenu(true)
