@@ -39,11 +39,13 @@ typedef struct {
 
 /* A quick link in the sidebar: the label shown and the path it navigates to.
  * `dev` is the underlying block device for device entries; it is empty for
- * pinned entries. */
+ * pinned entries. `icon` is the freedesktop icon name to draw beside the
+ * label. */
 typedef struct {
     char label[LIZ_FS_NAME_MAX];
     char path[PATH_MAX];
     char dev[64];
+    char icon[64];
 } liz_sidebar_entry;
 
 #define LIZ_SIDEBAR_PINNED_MAX 16
