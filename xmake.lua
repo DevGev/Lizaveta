@@ -13,6 +13,9 @@ target("lizaveta")
     add_files("source/fs/*.c")
     add_files("source/ui/*.c")
     add_files("source/dbus/*.c")
+    add_files("source/icons/*.c")
+
+    add_files("source/third_party/nanosvg/*.c", {warnings = "none"})
 
     set_warnings("all", "extra")
 
