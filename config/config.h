@@ -1,3 +1,7 @@
+/* To change software configurations, create or edit the file config/user.h.
+ * Don't edit this file.
+ * */
+
 #ifndef LIZAVETA_CONFIG_H
 #define LIZAVETA_CONFIG_H
 

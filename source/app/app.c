@@ -20,6 +20,7 @@
 #include "ui/chooser.h"
 #include "ui/delete.h"
 #include "ui/file_list.h"
+#include "ui/keybind.h"
 #include "ui/menu.h"
 #include "ui/nav.h"
 #include "ui/newfolder.h"
@@ -28,6 +29,30 @@
 #include "ui/sidebar.h"
 #include "ui/status.h"
 #include "ui/theme.h"
+
+#define LIZ_KEYBIND_COUNT                                                     \
+    (sizeof(liz_keybinds) / sizeof(liz_keybinds[0]))
+
+static const struct liz_keybind liz_keybinds[] = {
+    LIZ_BIND_QUIT,
+    LIZ_BIND_NAV_EDIT,
+    LIZ_BIND_TOGGLE_HIDDEN,
+    LIZ_BIND_TOGGLE_SIDEBAR,
+    LIZ_BIND_HALF_DOWN,
+    LIZ_BIND_HALF_UP,
+    LIZ_BIND_HISTORY_BACK,
+    LIZ_BIND_HISTORY_FORWARD,
+    LIZ_BIND_COPY,
+    LIZ_BIND_CUT,
+    LIZ_BIND_PASTE,
+    LIZ_BIND_PREVIEW,
+    LIZ_BIND_NEW_FOLDER,
+    LIZ_BIND_OPEN_TERMINAL,
+    LIZ_BIND_OPEN_TERMINAL_DIR,
+    LIZ_BIND_RENAME,
+    LIZ_BIND_GO_HOME,
+    LIZ_BIND_CLOSE_PREVIEW,
+};
 
 double liz_app_now(void)
 {
@@ -619,6 +644,93 @@ static void liz_app_close(liz_app* app)
     app->win->running = false;
 }
 
+/* Execute a resolved action. Returns true if the action was handled. */
+static bool liz_action_handle(liz_app* app, enum liz_action action)
+{
+    switch (action) {
+    case LIZ_ACTION_QUIT:
+        liz_app_close(app);
+        return true;
+    case LIZ_ACTION_NAV_EDIT:
+        liz_nav_toggle_edit(app);
+        return true;
+    case LIZ_ACTION_TOGGLE_HIDDEN:
+        liz_app_toggle_hidden(app);
+        return true;
+    case LIZ_ACTION_TOGGLE_SIDEBAR:
+        liz_app_toggle_sidebar(app);
+        return true;
+    case LIZ_ACTION_HALF_DOWN: {
+        int n = liz_list_visible_count(app) / 2;
+        if (n < 1)
+            n = 1;
+        liz_app_set_selected(app, app->selected + n);
+        return true;
+    }
+    case LIZ_ACTION_HALF_UP: {
+        int n = liz_list_visible_count(app) / 2;
+        if (n < 1)
+            n = 1;
+        liz_app_set_selected(app, app->selected - n);
+        return true;
+    }
+    case LIZ_ACTION_HISTORY_BACK:
+        liz_app_jump_back(app);
+        return true;
+    case LIZ_ACTION_HISTORY_FORWARD:
+        liz_app_jump_fwd(app);
+        return true;
+    case LIZ_ACTION_COPY:
+        if (app->nav_input.editing)
+            return false;
+        liz_app_copy_selection(app);
+        return true;
+    case LIZ_ACTION_CUT:
+        if (app->nav_input.editing)
+            return false;
+        liz_app_cut_selection(app);
+        return true;
+    case LIZ_ACTION_PASTE:
+        if (app->nav_input.editing)
+            return false;
+        liz_app_paste(app);
+        return true;
+    case LIZ_ACTION_PREVIEW:
+        liz_preview_toggle(app);
+        return true;
+    case LIZ_ACTION_NEW_FOLDER:
+        liz_newfolder_start(app);
+        return true;
+    case LIZ_ACTION_OPEN_TERMINAL:
+        liz_app_open_terminal(app, app->cwd);
+        return true;
+    case LIZ_ACTION_OPEN_TERMINAL_DIR: {
+        liz_fs_entry* e = (app->selected >= 0
+                          && (size_t)app->selected < app->entry_count)
+                             ? &app->entries[app->selected]
+                             : NULL;
+        if (e != NULL && e->type == LIZ_FS_DIR) {
+            char path[PATH_MAX];
+            if (liz_fs_join(path, sizeof(path), app->cwd, e->name) == 0)
+                liz_app_open_terminal(app, path);
+        }
+        return true;
+    }
+    case LIZ_ACTION_RENAME:
+        liz_rename_start(app);
+        return true;
+    case LIZ_ACTION_GO_HOME:
+        liz_app_go_home(app);
+        return true;
+    case LIZ_ACTION_CLOSE_PREVIEW:
+        liz_preview_close(app);
+        return true;
+    case LIZ_ACTION_NONE:
+        break;
+    }
+    return false;
+}
+
 static void liz_app_handle_key(liz_app* app, xc_event ev)
 {
     /* a bare modifier key press/release carries no action anywhere; ignore
@@ -626,10 +738,11 @@ static void liz_app_handle_key(liz_app* app, xc_event ev)
     if (liz_key_is_modifier(ev.key))
         return;
 
-    if (ev.key == XK_d
-        && (ev.state & ControlMask)
-        && (ev.state & Mod1Mask)
-        && !(ev.state & (Mod2Mask | Mod3Mask | Mod4Mask | Mod5Mask))) {
+    enum liz_action action = liz_keybind_resolve(
+        ev.key, ev.state, liz_keybinds, LIZ_KEYBIND_COUNT);
+
+    /* quit works from absolutely anywhere */
+    if (action == LIZ_ACTION_QUIT) {
         liz_app_close(app);
         return;
     }
@@ -659,61 +772,14 @@ static void liz_app_handle_key(liz_app* app, xc_event ev)
         return;
     }
 
-    /* Handled before any modal capture so they work from anywhere except
-     * the rename prompt (which captures everything). */
-    if ((ev.state & ControlMask)
-        && !(ev.state & (Mod1Mask | Mod2Mask | Mod3Mask
-                         | Mod4Mask | Mod5Mask))) {
+    /* Ctrl/Alt/Super shortcuts fire before nav/chooser/vim so they work
+     * from any non-modal context.  COPY/CUT/PASTE return false when
+     * nav_input.editing is true, letting the nav handler take over. */
+    if (ev.state & (ControlMask | Mod1Mask | Mod4Mask)) {
         app->vim.pending_g = false;
         app->vim.pending_d = false;
-        switch (ev.key) {
-        case XK_l:
-            liz_nav_toggle_edit(app);
+        if (action != LIZ_ACTION_NONE && liz_action_handle(app, action))
             return;
-        case XK_h:
-            liz_app_toggle_hidden(app);
-            return;
-        case XK_p:
-            liz_app_toggle_sidebar(app);
-            return;
-        case XK_d: { /* bulk scroll down, like vim */
-            int n = liz_list_visible_count(app) / 2;
-            if (n < 1)
-                n = 1;
-            liz_app_set_selected(app, app->selected + n);
-            return;
-        }
-        case XK_u: { /* bulk scroll up, like vim */
-            int n = liz_list_visible_count(app) / 2;
-            if (n < 1)
-                n = 1;
-            liz_app_set_selected(app, app->selected - n);
-            return;
-        }
-        case XK_o:
-            liz_app_jump_back(app);
-            return;
-        case XK_i:
-            liz_app_jump_fwd(app);
-            return;
-        case XK_c: /* copy the selection to the file clipboard */
-            if (app->nav_input.editing)
-                break; /* let the location editor handle its own clipboard */
-            liz_app_copy_selection(app);
-            return;
-        case XK_x: /* cut the selection (move on paste) */
-            if (app->nav_input.editing)
-                break;
-            liz_app_cut_selection(app);
-            return;
-        case XK_v: /* paste the staged entries into the current directory */
-            if (app->nav_input.editing)
-                break;
-            liz_app_paste(app);
-            return;
-        default:
-            break;
-        }
     }
 
     /* location bar editing captures all input until committed or cancelled */
@@ -743,9 +809,12 @@ static void liz_app_handle_key(liz_app* app, xc_event ev)
         return;
     }
 
-    /* NORMAL mode: vim motions/commands first, then the remaining plain-key
-     * bindings. */
+    /* NORMAL mode: vim motions/commands first, then the remaining
+     * configurable plain-key bindings. */
     if (liz_vim_handle_normal_key(app, ev))
+        return;
+
+    if (action != LIZ_ACTION_NONE && liz_action_handle(app, action))
         return;
 
     switch (ev.key) {
@@ -774,36 +843,6 @@ static void liz_app_handle_key(liz_app* app, xc_event ev)
     case XK_BackSpace:
     case XK_Left:
         liz_app_go_parent(app);
-        break;
-    case XK_p:
-        liz_preview_toggle(app);
-        break;
-    case XK_o:
-        liz_newfolder_start(app);
-        break;
-    case XK_t:
-        liz_app_open_terminal(app, app->cwd);
-        break;
-    case XK_T: { /* open terminal in the directory under the cursor */
-        liz_fs_entry* e = (app->selected >= 0
-                          && (size_t)app->selected < app->entry_count)
-                             ? &app->entries[app->selected]
-                             : NULL;
-        if (e != NULL && e->type == LIZ_FS_DIR) {
-            char path[PATH_MAX];
-            if (liz_fs_join(path, sizeof(path), app->cwd, e->name) == 0)
-                liz_app_open_terminal(app, path);
-        }
-        break;
-    }
-    case XK_r:
-        liz_rename_start(app);
-        break;
-    case XK_H:
-        liz_app_go_home(app);
-        break;
-    case XK_Escape:
-        liz_preview_close(app);
         break;
     default:
         break;
