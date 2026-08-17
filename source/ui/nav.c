@@ -71,8 +71,13 @@ static int liz_nav_build(liz_app* app)
 static void liz_nav_draw_chevron(xwindow* w, int cx, int cy)
 {
     const int arm = LIZ_NAV_CHEVRON_ARM;
-    xc_line(w, cx - arm, cy - arm, cx, cy, liz_theme_text_dim);
-    xc_line(w, cx, cy, cx - arm, cy + arm, liz_theme_text_dim);
+    XPoint points[3] = {
+        { (short)(cx - arm), (short)(cy - arm) },
+        { (short)cx,         (short)cy },
+        { (short)(cx - arm), (short)(cy + arm) }
+    };
+    XSetForeground(w->display, w->gc, xc_pixel(w, liz_theme_text_dim));
+    XDrawLines(w->display, w->buffer, w->gc, points, 3, CoordModeOrigin);
 }
 
 void liz_nav_draw(liz_app* app)
