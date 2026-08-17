@@ -15,6 +15,13 @@ Graphical X11 file manager with VIM bindings, written in C.
      - Compile with `xmake f --icons=y`
 - Minimal and launches very quickly.
 
+## Configuration
+This project is configured via header files, `user.h` should contain your local configuration. \
+Create a copy of `config/example_user.h` to edit with examples.
+```bash
+cp config/example_user.h config/user.h
+```
+
 ## Screenshots
 Image preview embedded in Lizaveta via `feh`. \
 Runs as a seperate process, embedded using Xlib.
