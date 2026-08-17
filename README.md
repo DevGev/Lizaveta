@@ -11,6 +11,8 @@ Graphical X11 file manager with VIM bindings, written in C.
      - Built-in image _feh_ & text _st+vim_ preview.
 - Supports `--filechooser` protocol.
 - DBUS integration out of the box.
+- Optional icon support via nanosvg.
+     - Compile with `xmake f --icons=y`
 - Minimal and launches very quickly.
 
 ## Screenshots
