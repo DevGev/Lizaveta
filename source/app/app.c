@@ -15,6 +15,7 @@
 
 #include <fontconfig/fontconfig.h>
 
+#include "icons/icons.h"
 #include "ui/chooser.h"
 #include "ui/delete.h"
 #include "ui/file_list.h"
@@ -1254,6 +1255,7 @@ int liz_app_init(liz_app* app)
 
     liz_vim_init(&app->vim);
     liz_sidebar_init(app);
+    liz_icons_init();
 
     char cwd[PATH_MAX];
     if (getcwd(cwd, sizeof(cwd)) == NULL)
@@ -1269,6 +1271,7 @@ void liz_app_quit(liz_app* app)
     liz_preview_shutdown(app);
 
     if (app->win) {
+        liz_icons_shutdown(app->win);
         xc_font_free(app->win, app->font);
         xc_font_free(app->win, app->font_bold);
         xc_font_free(app->win, app->font_dim);
