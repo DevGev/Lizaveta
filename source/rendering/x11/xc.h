@@ -74,6 +74,7 @@ typedef struct xwindow {
     xc_color bg;
 
     Pixmap buffer;   /* backing store, size == window */
+    Picture buffer_pic; /* XRender handle on `buffer`, for alpha compositing */
     XftDraw* xftdraw;
 
     Atom wm_protocols; /* WM_PROTOCOLS, the message_type the WM sends */
@@ -146,9 +147,26 @@ typedef struct {
     XftColor color;
 } xc_font;
 
+/* An RGBA image living on the X server, composited with XRender. */
+typedef struct {
+    Pixmap pixmap;
+    Picture picture;
+    int width;
+    int height;
+} xc_image;
+
+static inline int xc_native_byte_order(void)
+{
+    uint16_t probe = 1;
+    return *(const uint8_t*)&probe ? LSBFirst : MSBFirst;
+}
+
 static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_color bg, const char* title);
 static inline void xc_window_destroy(xwindow* w);
 static inline void xc_set_managed(xwindow* w, bool managed);
+static inline void xc_set_class(xwindow* w, const char* instance, const char* class_name);
+static inline void xc_set_dialog(xwindow* w);
+static inline void xc_center_on_monitor(xwindow* w, int width, int height);
 static inline void xc_run(xwindow* w);
 
 /* ---- clipboard API ----
@@ -187,6 +205,9 @@ static inline void xc_flip(xwindow* w);
 static inline xc_font* xc_font_load(xwindow* w, const char* family, double px, xc_color color);
 static inline xc_font* xc_font_load_style(xwindow* w, const char* family, double px, const char* style, xc_color color);
 static inline void xc_font_free(xwindow* w, xc_font* f);
+static inline xc_image* xc_image_from_rgba(xwindow* w, const unsigned char* rgba, int width, int height);
+static inline void xc_image_draw(xwindow* w, const xc_image* img, int x, int y);
+static inline void xc_image_free(xwindow* w, xc_image* img);
 static inline void xc_font_metrics(xc_font* f, int* ascent, int* descent);
 
 static inline int xc_color_shift(unsigned long mask)
@@ -238,9 +259,14 @@ static inline void xc_resize_buffer(xwindow* w)
         return;
     Pixmap next = XCreatePixmap(w->display, w->window, w->width, w->height, w->depth);
     XftDrawChange(w->xftdraw, next);
+    if (w->buffer_pic != None)
+        XRenderFreePicture(w->display, w->buffer_pic);
     if (w->buffer != None)
         XFreePixmap(w->display, w->buffer);
     w->buffer = next;
+
+    XRenderPictFormat* fmt = XRenderFindVisualFormat(w->display, w->visual);
+    w->buffer_pic = fmt ? XRenderCreatePicture(w->display, w->buffer, fmt, 0, NULL) : None;
 }
 
 static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_color bg, const char* title)
@@ -265,6 +291,7 @@ static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_
     w->running = false;
     w->events = NULL;
     w->buffer = None;
+    w->buffer_pic = None;
 
     XSetWindowAttributes attr;
     memset(&attr, 0, sizeof(attr));
@@ -1197,6 +1224,8 @@ static inline void xc_window_destroy(xwindow* w)
         return;
     if (w->xftdraw)
         XftDrawDestroy(w->xftdraw);
+    if (w->buffer_pic != None)
+        XRenderFreePicture(w->display, w->buffer_pic);
     if (w->buffer != None)
         XFreePixmap(w->display, w->buffer);
     if (w->gc)
@@ -1246,6 +1275,90 @@ static inline int xc_text(xwindow* w, int x, int y, const char* text, int len, x
     XGlyphInfo ext;
     XftTextExtentsUtf8(w->display, f->xft, (const FcChar8*)text, len, &ext);
     return ext.xOff;
+}
+
+/* Uploads straight (non-premultiplied) RGBA into a server-side ARGB32
+ * pixmap ready for alpha compositing. XRender expects premultiplied
+ * components, so the multiply happens here, once per image, rather than on
+ * every draw. */
+static inline xc_image* xc_image_from_rgba(xwindow* w, const unsigned char* rgba,
+                                           int width, int height)
+{
+    if (width < 1 || height < 1)
+        return NULL;
+
+    XRenderPictFormat* fmt = XRenderFindStandardFormat(w->display, PictStandardARGB32);
+    if (!fmt)
+        return NULL;
+
+    uint32_t* words = (uint32_t*)malloc((size_t)width * (size_t)height * 4);
+    if (!words)
+        return NULL;
+    for (int i = 0; i < width * height; i++) {
+        unsigned a = rgba[i * 4 + 3];
+        unsigned r = rgba[i * 4 + 0] * a / 255;
+        unsigned g = rgba[i * 4 + 1] * a / 255;
+        unsigned b = rgba[i * 4 + 2] * a / 255;
+        words[i] = ((uint32_t)a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    Pixmap pix = XCreatePixmap(w->display, DefaultRootWindow(w->display),
+                               (unsigned)width, (unsigned)height, 32);
+
+    /* The image is described in this machine's byte order; XPutImage swaps
+     * for the server when they disagree. */
+    XImage img;
+    memset(&img, 0, sizeof(img));
+    img.width = width;
+    img.height = height;
+    img.format = ZPixmap;
+    img.data = (char*)words;
+    img.byte_order = xc_native_byte_order();
+    img.bitmap_unit = 32;
+    img.bitmap_bit_order = img.byte_order;
+    img.bitmap_pad = 32;
+    img.depth = 32;
+    img.bytes_per_line = width * 4;
+    img.bits_per_pixel = 32;
+    img.red_mask = 0x00ff0000;
+    img.green_mask = 0x0000ff00;
+    img.blue_mask = 0x000000ff;
+    XInitImage(&img);
+
+    GC gc = XCreateGC(w->display, pix, 0, NULL);
+    XPutImage(w->display, pix, gc, &img, 0, 0, 0, 0, (unsigned)width, (unsigned)height);
+    XFreeGC(w->display, gc);
+    free(words);
+
+    xc_image* out = (xc_image*)calloc(1, sizeof(xc_image));
+    if (!out) {
+        XFreePixmap(w->display, pix);
+        return NULL;
+    }
+    out->pixmap = pix;
+    out->picture = XRenderCreatePicture(w->display, pix, fmt, 0, NULL);
+    out->width = width;
+    out->height = height;
+    return out;
+}
+
+static inline void xc_image_draw(xwindow* w, const xc_image* img, int x, int y)
+{
+    if (!img || w->buffer_pic == None)
+        return;
+    XRenderComposite(w->display, PictOpOver, img->picture, None, w->buffer_pic,
+                     0, 0, 0, 0, x, y, (unsigned)img->width, (unsigned)img->height);
+}
+
+static inline void xc_image_free(xwindow* w, xc_image* img)
+{
+    if (!img)
+        return;
+    if (img->picture != None)
+        XRenderFreePicture(w->display, img->picture);
+    if (img->pixmap != None)
+        XFreePixmap(w->display, img->pixmap);
+    free(img);
 }
 
 static inline void xc_flip(xwindow* w)
