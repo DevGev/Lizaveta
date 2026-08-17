@@ -10,6 +10,7 @@
 #include "rendering/x11/xc.h"
 #include "fs/fs.h"
 #include "ui/editor.h"
+#include "apps/apps.h"
 #include "ui/ui.h"
 #include "ui/vim.h"
 
@@ -121,6 +122,8 @@ typedef struct {
  * instead carry the sidebar entry they were opened on. */
 typedef enum {
     LIZ_MENU_OPEN,
+    LIZ_MENU_OPEN_WITH,     /* replaces the menu with the application list */
+    LIZ_MENU_OPEN_WITH_APP, /* item.data indexes liz_context_menu.apps */
     LIZ_MENU_RENAME,
     LIZ_MENU_COPY,
     LIZ_MENU_CUT,
@@ -138,10 +141,13 @@ typedef enum {
 
 typedef struct {
     liz_menu_action action;
-    const char* label; /* points at a string literal; never owned/freed */
+    /* a string literal, or a name inside liz_context_menu.apps, which
+     * outlives the menu it is shown in; never owned or freed here */
+    const char* label;
+    int data; /* action-specific payload, unused by most actions */
 } liz_menu_item;
 
-#define LIZ_MENU_ITEMS_MAX 8
+#define LIZ_MENU_ITEMS_MAX (LIZ_APPS_MAX + 8)
 
 typedef struct {
     bool active;
@@ -149,6 +155,11 @@ typedef struct {
     liz_menu_item items[LIZ_MENU_ITEMS_MAX];
     int item_count;
     int hover;      /* hovered item index, -1 when none */
+    int width;      /* widened to fit the longest label */
+    /* applications that can open the row the menu was opened on, filled in
+     * when the menu is built so the "Open with" list is ready to show */
+    liz_desktop_app apps[LIZ_APPS_MAX];
+    int app_count;
     int row;        /* list row right-clicked, -1 when the click was on empty space */
     liz_menu_source source;  /* which view the menu was opened from */
     int sidebar_index;      /* sidebar entry index (sidebar menus) */
@@ -332,6 +343,10 @@ void liz_app_open_row(liz_app* app, int row);
 
 /* Opens `path` with the default application, detached from the app. */
 void liz_app_open_file(liz_app* app, const char* path);
+
+/* Opens the file at `row` with a specific application rather than the
+ * desktop default. */
+void liz_app_open_row_with(liz_app* app, int row, const liz_desktop_app* with);
 
 /* Opens a terminal emulator whose working directory is `path`, detached
  * from the app (st is used if $TERMINAL is unset). */
