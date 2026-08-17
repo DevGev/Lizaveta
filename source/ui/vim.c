@@ -7,6 +7,7 @@
 
 #include "app/app.h"
 #include "ui/delete.h"
+#include "ui/file_list.h"
 
 static bool liz_str_ci_contains(const char* hay, const char* needle)
 {
@@ -282,11 +283,31 @@ bool liz_vim_handle_visual_key(liz_app* app, xc_event ev)
         return true; /* a list has no horizontal axis to extend along */
     case XK_d:
     case XK_Delete:
+        if (ev.key == XK_d && (ev.state & ControlMask)) {
+            int n = liz_list_visible_count(app) / 2;
+            if (n < 1)
+                n = 1;
+            liz_app_set_selected(app, app->selected + n);
+            liz_vim_visual_sync(app);
+            return true;
+        }
         /* delete the visual selection: snapshot the selected rows before
          * exiting VISUAL (which clears the selection) */
         liz_delete_start_selection(app);
         liz_vim_exit_visual(app);
         return true;
+    case XK_u:
+        if (ev.state & ControlMask) {
+            int n = liz_list_visible_count(app) / 2;
+            if (n < 1)
+                n = 1;
+            liz_app_set_selected(app, app->selected - n);
+            liz_vim_visual_sync(app);
+            return true;
+        }
+        /* plain u is not handled – leave VISUAL and let normal mode pick it up */
+        liz_vim_exit_visual(app);
+        return false;
     case XK_Return:
     case XK_KP_Enter:
         liz_vim_exit_visual(app);

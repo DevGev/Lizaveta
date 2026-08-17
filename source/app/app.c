@@ -661,6 +661,8 @@ static bool liz_action_handle(liz_app* app, enum liz_action action)
         liz_app_toggle_sidebar(app);
         return true;
     case LIZ_ACTION_HALF_DOWN: {
+        if (app->vim.visual_active)
+            return false;
         int n = liz_list_visible_count(app) / 2;
         if (n < 1)
             n = 1;
@@ -668,6 +670,8 @@ static bool liz_action_handle(liz_app* app, enum liz_action action)
         return true;
     }
     case LIZ_ACTION_HALF_UP: {
+        if (app->vim.visual_active)
+            return false;
         int n = liz_list_visible_count(app) / 2;
         if (n < 1)
             n = 1;
