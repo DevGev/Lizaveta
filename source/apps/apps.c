@@ -238,8 +238,8 @@ typedef struct {
     int max;
 } liz_apps_collect;
 
-/* Appends `id` unless it is already in the list. Always returns false, so
- * liz_apps_each_id walks the whole list instead of stopping at the first. */
+/* Appends `id` unless it is already in the list. Returns true only when
+ * the output is full, to stop liz_apps_each_id early. */
 static bool liz_apps_collect_id(const char* id, void* data)
 {
     liz_apps_collect* c = (liz_apps_collect*)data;
