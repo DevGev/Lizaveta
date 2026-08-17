@@ -989,7 +989,6 @@ static inline void xc_run(xwindow* w)
 {
     XMapRaised(w->display, w->window);
     XFlush(w->display);
-    xc_grab_focus(w);
 
     w->running = true;
     XEvent xe;
@@ -1041,6 +1040,11 @@ static inline void xc_run(xwindow* w)
             if (xe.xexpose.count == 0)
                 ev.type = XC_EVENT_EXPOSE;
             break;
+        /* focus only once the server reports the window viewable: an
+         * XSetInputFocus on an unmapped window is a BadMatch */
+        case MapNotify:
+            xc_grab_focus(w);
+            continue;
         case ConfigureNotify:
             if (xe.xconfigure.width != w->width || xe.xconfigure.height != w->height) {
                 w->width = xe.xconfigure.width;
