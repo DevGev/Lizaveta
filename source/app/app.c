@@ -1284,7 +1284,9 @@ int liz_app_init(liz_app* app)
 
     liz_vim_init(&app->vim);
     liz_sidebar_init(app);
+#ifdef ICON_SUPPORT
     liz_icons_init();
+#endif
 
     char cwd[PATH_MAX];
     if (getcwd(cwd, sizeof(cwd)) == NULL)
@@ -1300,7 +1302,9 @@ void liz_app_quit(liz_app* app)
     liz_preview_shutdown(app);
 
     if (app->win) {
+#ifdef ICON_SUPPORT
         liz_icons_shutdown(app->win);
+#endif
         xc_font_free(app->win, app->font);
         xc_font_free(app->win, app->font_bold);
         xc_font_free(app->win, app->font_dim);

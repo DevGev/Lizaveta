@@ -249,9 +249,13 @@ static void liz_sidebar_draw_item(liz_app* app, xwindow* w, const liz_sidebar_en
     if (idx == app->sidebar.hover_item)
         xc_rect(w, 0, y, LIZ_UI_SIDEBAR_W, LIZ_UI_ROW_H, liz_theme_hover_bg);
 
+#ifdef ICON_SUPPORT
     const xc_image* icon = liz_icons_by_name(w, e->icon, liz_theme_text);
     if (icon)
         xc_image_draw(w, icon, icon_x, y + (LIZ_UI_ROW_H - LIZ_ICON_SIZE) / 2);
+#else
+    (void)icon_x;
+#endif
 
     int ty = y + (LIZ_UI_ROW_H - (ascent + descent)) / 2 + ascent;
     liz_ui_text_clip(w, text_x, ty, e->label, (int)strlen(e->label), app->font, max_w);
@@ -289,7 +293,11 @@ void liz_sidebar_draw(liz_app* app)
     /* section headers keep the outer padding; items are indented past
      * their icon so the labels line up in one column */
     int icon_x = LIZ_SIDEBAR_PAD_X;
+#ifdef ICON_SUPPORT
     int text_x = icon_x + LIZ_ICON_SIZE + LIZ_SIDEBAR_ICON_GAP;
+#else
+    int text_x = LIZ_SIDEBAR_PAD_X;
+#endif
     int max_w = LIZ_UI_SIDEBAR_W - text_x - LIZ_UI_PAD;
 
     int y = top;

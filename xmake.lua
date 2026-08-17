@@ -6,6 +6,16 @@ add_rules("plugin.compile_commands.autoupdate")
 
 add_moduledirs("xmake")
 
+option("icons")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Enable icon support (requires NanoSVG)")
+option_end()
+
+if has_config("icons") then
+    add_requires("nanosvg")
+end
+
 local function default_prefix()
     local home = os.getenv("HOME")
     return home and path.join(home, ".local") or "/usr/local"
@@ -25,7 +35,10 @@ target("lizaveta")
     add_files("source/dbus/*.c")
     add_files("source/icons/*.c")
 
-    add_files("source/third_party/nanosvg/*.c", {warnings = "none"})
+    if has_config("icons") then
+        add_packages("nanosvg")
+        add_defines("ICON_SUPPORT")
+    end
 
     set_warnings("all", "extra")
 

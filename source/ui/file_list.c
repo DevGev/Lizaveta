@@ -217,6 +217,7 @@ void liz_list_draw(liz_app* app)
                                     text_x, y, max_name_w);
         }
 
+#ifdef ICON_SUPPORT
         /* symbolic icons are drawn in the inherited text color, so they
          * follow whatever color this row's label uses */
         xc_color tint = liz_theme_text;
@@ -230,6 +231,7 @@ void liz_list_draw(liz_app* app)
             xc_image_draw(w, icon, left + LIZ_UI_PAD,
                           y + (LIZ_UI_ROW_H - LIZ_ICON_SIZE) / 2);
         else
+#endif
             liz_list_draw_marker(w, e->type, left + LIZ_UI_PAD + 2, y + LIZ_UI_ROW_H / 2);
 
         int text_y = y + (LIZ_UI_ROW_H - line_h) / 2 + ascent;

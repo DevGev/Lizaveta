@@ -1,5 +1,7 @@
 /* icons.c - freedesktop icon theme lookup, rendered through nanosvg. */
 
+#ifdef ICON_SUPPORT
+
 #include "icons/icons.h"
 
 #include <limits.h>
@@ -12,8 +14,8 @@
 #include "fs/ini.h"
 #include "icons/mime.h"
 #include "icons/xdg.h"
-#include "third_party/nanosvg/nanosvg.h"
-#include "third_party/nanosvg/nanosvgrast.h"
+#include <nanosvg.h>
+#include <nanosvgrast.h>
 
 #define LIZ_ICON_SEARCH_MAX 1024 /* resolved directories to scan per lookup */
 #define LIZ_ICON_THEME_MAX  8    /* depth of the Inherits chain */
@@ -479,3 +481,5 @@ void liz_icons_shutdown(xwindow* w)
     g_dir_count = 0;
     g_ready = false;
 }
+
+#endif /* ICON_SUPPORT */

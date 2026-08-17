@@ -3,10 +3,12 @@
 #ifndef LIZ_ICONS_H
 #define LIZ_ICONS_H
 
+#define LIZ_ICON_SIZE 16
+
+#ifdef ICON_SUPPORT
+
 #include "fs/fs.h"
 #include "rendering/x11/xc.h"
-
-#define LIZ_ICON_SIZE 16
 
 /* Resolves the active icon theme and loads the MIME database. Both are
  * optional: without them every lookup returns NULL and the caller falls
@@ -24,5 +26,7 @@ const xc_image* liz_icons_for_entry(xwindow* w, const char* dir, const liz_fs_en
 
 /* Icon looked up directly by freedesktop name, e.g. "user-home". */
 const xc_image* liz_icons_by_name(xwindow* w, const char* name, xc_color tint);
+
+#endif /* ICON_SUPPORT */
 
 #endif /* LIZ_ICONS_H */
