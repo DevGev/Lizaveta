@@ -10,6 +10,7 @@ target("lizaveta")
 
     add_files("source/*.c")
     add_files("source/app/*.c")
+    add_files("source/apps/*.c")
     add_files("source/fs/*.c")
     add_files("source/ui/*.c")
     add_files("source/dbus/*.c")

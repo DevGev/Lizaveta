@@ -15,6 +15,7 @@
 
 #include <fontconfig/fontconfig.h>
 
+#include "apps/apps.h"
 #include "icons/icons.h"
 #include "ui/chooser.h"
 #include "ui/delete.h"
@@ -285,13 +286,39 @@ static bool liz_app_detach(void)
     return true;
 }
 
-/* Opens `path` with the desktop default application (xdg-open on Linux). */
+/* Opens `path` with the desktop default application.
+ *
+ * The association database is read directly rather than deferring to
+ * xdg-open, which only consults it for the handful of desktops it knows by
+ * name. Under anything else it falls through to launching the web browser,
+ * so opening a PDF would flash up Firefox on the way to the PDF viewer.
+ * xdg-open remains the fallback for a file no application claims. */
 void liz_app_open_file(liz_app* app, const char* path)
 {
     (void)app;
+    liz_desktop_app handler;
+    bool resolved = liz_apps_for(path, &handler);
+
     if (!liz_app_detach())
         return;
+    if (resolved)
+        liz_apps_exec(&handler, path); /* only returns if it could not run */
     execlp("xdg-open", "xdg-open", path, (char*)NULL);
+    _exit(127);
+}
+
+void liz_app_open_row_with(liz_app* app, int row, const liz_desktop_app* with)
+{
+    if (row < 0 || (size_t)row >= app->entry_count || !with)
+        return;
+
+    char path[PATH_MAX];
+    if (liz_fs_join(path, sizeof(path), app->cwd, app->entries[row].name) != 0)
+        return;
+
+    if (!liz_app_detach())
+        return;
+    liz_apps_exec(with, path);
     _exit(127);
 }
 
