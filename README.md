@@ -22,6 +22,13 @@ Create a copy of `config/example_user.h` to edit with examples.
 cp config/example_user.h config/user.h
 ```
 
+If Lizaveta was built previously without `config/user.h` in its dependency tree, \
+you have to run `xmake clean` before recompiling for the changes to propegate.
+
+```bash 
+xmake clean && xmake
+```
+
 ## Screenshots
 Image preview embedded in Lizaveta via `feh`. \
 Runs as a seperate process, embedded using Xlib.
