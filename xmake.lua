@@ -33,7 +33,7 @@ target("lizaveta")
 
     on_load(function (target)
         import("lib.detect.find_package")
-        for _, pkg in ipairs({"x11", "xft", "xrender", "fontconfig", "libudev", "dbus-1"}) do
+        for _, pkg in ipairs({"x11", "xft", "xrender", "xrandr", "fontconfig", "libudev", "dbus-1"}) do
             local package = find_package(pkg)
             if package then
                 target:add(package)

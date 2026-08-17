@@ -19,6 +19,7 @@
 #include <X11/keysym.h>
 #include <X11/Xft/Xft.h>
 #include <X11/extensions/Xrender.h>
+#include <X11/extensions/Xrandr.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -369,6 +370,97 @@ static inline void xc_grab_focus(xwindow* w)
     XGetInputFocus(w->display, &focus, &revert);
     if (focus == None || focus == PointerRoot || focus == w->window)
         XSetInputFocus(w->display, w->window, RevertToParent, CurrentTime);
+}
+
+/* WM_CLASS, which is how window managers address a window in their rules.
+ * `instance` names this particular window, `class_name` the application. */
+static inline void xc_set_class(xwindow* w, const char* instance, const char* class_name)
+{
+    XClassHint hint;
+    hint.res_name = (char*)instance;
+    hint.res_class = (char*)class_name;
+    XSetClassHint(w->display, w->window, &hint);
+}
+
+/* Marks the window as a dialog, which is what makes a tiling window
+ * manager float it instead of giving it a tile. Window managers read this
+ * when the window is mapped, so it has to be set before xc_run. */
+static inline void xc_set_dialog(xwindow* w)
+{
+    Atom type = XInternAtom(w->display, "_NET_WM_WINDOW_TYPE", False);
+    Atom dialog = XInternAtom(w->display, "_NET_WM_WINDOW_TYPE_DIALOG", False);
+    XChangeProperty(w->display, w->window, type, XA_ATOM, 32, PropModeReplace,
+                    (unsigned char*)&dialog, 1);
+}
+
+/* The monitor the pointer is on, in root coordinates.
+ *
+ * X presents a multi-head setup as one wide screen, so centring on the
+ * screen puts a window across the seam between two monitors. RandR is what
+ * knows where one monitor ends and the next begins; without it the whole
+ * screen is the answer, which is the single-monitor case anyway. */
+static inline void xc_pointer_monitor(xwindow* w, int* out_x, int* out_y,
+                                      int* out_w, int* out_h)
+{
+    *out_x = 0;
+    *out_y = 0;
+    *out_w = DisplayWidth(w->display, w->screen);
+    *out_h = DisplayHeight(w->display, w->screen);
+
+    Window root = RootWindow(w->display, w->screen);
+    Window child;
+    int px = 0, py = 0, win_x = 0, win_y = 0;
+    unsigned int mask = 0;
+    if (!XQueryPointer(w->display, root, &root, &child, &px, &py, &win_x, &win_y, &mask))
+        return;
+
+    int count = 0;
+    XRRMonitorInfo* monitors = XRRGetMonitors(w->display, root, True, &count);
+    if (!monitors)
+        return;
+    for (int i = 0; i < count; i++) {
+        if (px >= monitors[i].x && px < monitors[i].x + monitors[i].width
+            && py >= monitors[i].y && py < monitors[i].y + monitors[i].height) {
+            *out_x = monitors[i].x;
+            *out_y = monitors[i].y;
+            *out_w = monitors[i].width;
+            *out_h = monitors[i].height;
+            break;
+        }
+    }
+    XRRFreeMonitors(monitors);
+}
+
+/* Resizes to `width` x `height` and centres on the monitor the pointer is
+ * on, which is the one the application that asked for the window is being
+ * used on. The size hints are updated alongside, since a window manager
+ * placing a floating window goes by those rather than the geometry alone. */
+static inline void xc_center_on_monitor(xwindow* w, int width, int height)
+{
+    int mon_x = 0, mon_y = 0, mon_w = 0, mon_h = 0;
+    xc_pointer_monitor(w, &mon_x, &mon_y, &mon_w, &mon_h);
+
+    if (width > mon_w)
+        width = mon_w;
+    if (height > mon_h)
+        height = mon_h;
+
+    int x = mon_x + (mon_w - width) / 2;
+    int y = mon_y + (mon_h - height) / 2;
+
+    XSizeHints size;
+    memset(&size, 0, sizeof(size));
+    size.flags = PPosition | PSize | USPosition | USSize;
+    size.x = x;
+    size.y = y;
+    size.width = width;
+    size.height = height;
+    XSetWMNormalHints(w->display, w->window, &size);
+
+    XMoveResizeWindow(w->display, w->window, x, y, (unsigned)width, (unsigned)height);
+    w->width = width;
+    w->height = height;
+    xc_resize_buffer(w);
 }
 
 static inline void xc_set_managed(xwindow* w, bool managed)

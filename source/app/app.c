@@ -1251,6 +1251,8 @@ int liz_app_init(liz_app* app)
     app->last_list_visible = -1;
 
     xwindow* win = xc_window_create(120, 120, 900, 600, liz_theme_bg, "lizaveta");
+    if (win)
+        xc_set_class(win, "lizaveta", "lizaveta");
     if (!win)
         return -1;
     app->win = win;
