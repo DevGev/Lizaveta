@@ -1,6 +1,8 @@
 #ifndef LIZ_KEYBIND_H
 #define LIZ_KEYBIND_H
 
+#include <stdbool.h>
+
 enum liz_action {
     LIZ_ACTION_NONE = -1,
     LIZ_ACTION_QUIT,
