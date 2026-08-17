@@ -11,6 +11,8 @@
 #include "ui/theme.h"
 
 #define LIZ_NAV_SEG_PAD 6
+#define LIZ_NAV_CHEVRON_W 13 /* gap between two segments, holding the chevron */
+#define LIZ_NAV_CHEVRON_ARM 3
 
 static void liz_nav_draw_edit(liz_app* app);
 
@@ -44,18 +46,33 @@ static int liz_nav_build(liz_app* app)
     }
 
     int x = LIZ_UI_PAD;
+    int placed = 0;
     for (int k = 0; k < n; k++) {
         int tw = 0;
         xc_text_measure(w, app->nav_sg[k].text, app->nav_sg[k].len, app->font, &tw, NULL);
         int bw = tw + LIZ_NAV_SEG_PAD * 2;
-        if (k > 0 && x + bw > w->width - LIZ_UI_PAD)
+        int lead = k > 0 ? LIZ_NAV_CHEVRON_W : 0;
+        if (k > 0 && x + lead + bw > w->width - LIZ_UI_PAD)
             break;
-        app->nav_sg[k].x0 = x;
-        app->nav_sg[k].x1 = x + bw;
-        x += bw;
+        app->nav_sg[k].x0 = x + lead;
+        app->nav_sg[k].x1 = x + lead + bw;
+        x = app->nav_sg[k].x1;
+        placed++;
     }
-    app->nav_segments = n;
-    return n;
+
+    /* segments past the edge never got coordinates, so they are dropped
+     * rather than drawn and hit-tested at stale positions */
+    app->nav_segments = placed;
+    return placed;
+}
+
+/* The ">" between two segments. Drawn from lines rather than a glyph so it
+ * stays crisp and lines up with the text whatever the font is. */
+static void liz_nav_draw_chevron(xwindow* w, int cx, int cy)
+{
+    const int arm = LIZ_NAV_CHEVRON_ARM;
+    xc_line(w, cx - arm, cy - arm, cx, cy, liz_theme_text_dim);
+    xc_line(w, cx, cy, cx - arm, cy + arm, liz_theme_text_dim);
 }
 
 void liz_nav_draw(liz_app* app)
@@ -79,6 +96,9 @@ void liz_nav_draw(liz_app* app)
 
     for (int k = 0; k < n; k++) {
         liz_nav_segment* sg = &app->nav_sg[k];
+
+        if (k > 0)
+            liz_nav_draw_chevron(w, (app->nav_sg[k - 1].x1 + sg->x0) / 2, h / 2);
 
         bool hover = app->mouse_y >= 0 && app->mouse_y < h
                   && app->mouse_x >= sg->x0 && app->mouse_x < sg->x1;
