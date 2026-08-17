@@ -76,7 +76,8 @@ typedef struct xwindow {
     Pixmap buffer;   /* backing store, size == window */
     XftDraw* xftdraw;
 
-    Atom wm_delete;
+    Atom wm_protocols; /* WM_PROTOCOLS, the message_type the WM sends */
+    Atom wm_delete;    /* WM_DELETE_WINDOW, which arrives inside it */
 
     /* CLIPBOARD selection ownership */
     Atom clip_sel;      /* CLIPBOARD */
@@ -280,7 +281,9 @@ static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_
     w->gc = XCreateGC(w->display, w->window, 0, NULL);
     XSetLineAttributes(w->display, w->gc, 1, LineSolid, CapButt, JoinMiter);
 
-    /* WM_DELETE_WINDOW so clicking the close button generates XC_EVENT_CLOSE */
+    /* WM_DELETE_WINDOW so a close request from the window manager, whether
+     * from a titlebar button or a keybinding, generates XC_EVENT_CLOSE */
+    w->wm_protocols = XInternAtom(w->display, "WM_PROTOCOLS", False);
     w->wm_delete = XInternAtom(w->display, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(w->display, w->window, &w->wm_delete, 1);
 
@@ -1057,8 +1060,12 @@ static inline void xc_run(xwindow* w)
             break;
         case ClientMessage: {
             Atom mt = (Atom)xe.xclient.message_type;
-            if (mt == w->wm_delete) {
-                ev.type = XC_EVENT_CLOSE;
+            /* A WM_PROTOCOLS message names the actual protocol in
+             * data.l[0]; the XDND messages below instead carry their own
+             * atom as the message type. */
+            if (mt == w->wm_protocols) {
+                if ((Atom)xe.xclient.data.l[0] == w->wm_delete)
+                    ev.type = XC_EVENT_CLOSE;
             } else if (mt == w->xdnd_enter) {
                 xc_dnd_handle_enter(w, &xe.xclient);
             } else if (mt == w->xdnd_position) {
