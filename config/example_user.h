@@ -9,6 +9,10 @@
 
 /* ---- Theme --------------------------------------------------------------- */
 
+/* Default */
+// #undef LIZ_THEME_DEFAULT
+// #define LIZ_THEME_DEFAULT
+
 /* Catppuccin Mocha */
 // #undef LIZ_THEME_DEFAULT
 // #define LIZ_THEME_CATPPUCCIN_MOCHA
