@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <string.h>
 
+#include "icons/icons.h"
 #include "ui/preview.h"
 #include "ui/theme.h"
 
@@ -72,7 +73,8 @@ void liz_list_keep_selection_visible(liz_app* app)
         app->scroll = app->selected - visible + 1;
 }
 
-/* Draws the colored square marker that communicates an entry's type. */
+/* Falls back to a colored square when the icon theme has nothing for an
+ * entry, so the type is still readable. */
 static void liz_list_draw_marker(xwindow* w, liz_fs_type type, int x, int cy)
 {
     switch (type) {
@@ -215,7 +217,20 @@ void liz_list_draw(liz_app* app)
                                     text_x, y, max_name_w);
         }
 
-        liz_list_draw_marker(w, e->type, left + LIZ_UI_PAD + 2, y + LIZ_UI_ROW_H / 2);
+        /* symbolic icons are drawn in the inherited text color, so they
+         * follow whatever color this row's label uses */
+        xc_color tint = liz_theme_text;
+        if (e->type == LIZ_FS_DIR || e->type == LIZ_FS_LINK)
+            tint = liz_theme_dir;
+        else if (e->hidden)
+            tint = liz_theme_text_dim;
+
+        const xc_image* icon = liz_icons_for_entry(w, app->cwd, e, tint);
+        if (icon)
+            xc_image_draw(w, icon, left + LIZ_UI_PAD,
+                          y + (LIZ_UI_ROW_H - LIZ_ICON_SIZE) / 2);
+        else
+            liz_list_draw_marker(w, e->type, left + LIZ_UI_PAD + 2, y + LIZ_UI_ROW_H / 2);
 
         int text_y = y + (LIZ_UI_ROW_H - line_h) / 2 + ascent;
 

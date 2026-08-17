@@ -10,6 +10,11 @@ typedef struct liz_app liz_app;
 
 #include "rendering/x11/xc.h"
 
+/* The picker floats, so it asks for a size of its own rather than taking
+ * whatever a tiling window manager would hand it. */
+#define LIZ_CHOOSER_WIDTH  820
+#define LIZ_CHOOSER_HEIGHT 540
+
 /* Activates chooser mode and navigates to the configured start directory.
  * The caller sets app->chooser fields (mode, out_path, save_name, ...)
  * beforehand; the start directory may be relative or a file-selector://

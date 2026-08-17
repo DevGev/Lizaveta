@@ -57,6 +57,14 @@ void liz_chooser_start(liz_app* app)
     app->vim.pending_g = false;
     app->vim.pending_d = false;
 
+    /* A picker is a dialog, not a place to live in: it says so before the
+     * window is mapped, so a tiling window manager floats it rather than
+     * carving a tile out of the session. The instance name is distinct from
+     * the browser window's so window rules can address the two separately. */
+    xc_set_class(app->win, "lizaveta-filechooser", "lizaveta");
+    xc_set_dialog(app->win);
+    xc_center_on_monitor(app->win, LIZ_CHOOSER_WIDTH, LIZ_CHOOSER_HEIGHT);
+
     /* SAVE mode: the name prompt is deliberately *not* opened here. Browse
      * to the target folder first (normal navigation, nothing intercepted),
      * then Ctrl+Enter opens the name field as the last step before saving

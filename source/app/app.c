@@ -15,6 +15,8 @@
 
 #include <fontconfig/fontconfig.h>
 
+#include "apps/apps.h"
+#include "icons/icons.h"
 #include "ui/chooser.h"
 #include "ui/delete.h"
 #include "ui/file_list.h"
@@ -284,13 +286,39 @@ static bool liz_app_detach(void)
     return true;
 }
 
-/* Opens `path` with the desktop default application (xdg-open on Linux). */
+/* Opens `path` with the desktop default application.
+ *
+ * The association database is read directly rather than deferring to
+ * xdg-open, which only consults it for the handful of desktops it knows by
+ * name. Under anything else it falls through to launching the web browser,
+ * so opening a PDF would flash up Firefox on the way to the PDF viewer.
+ * xdg-open remains the fallback for a file no application claims. */
 void liz_app_open_file(liz_app* app, const char* path)
 {
     (void)app;
+    liz_desktop_app handler;
+    bool resolved = liz_apps_for(path, &handler);
+
     if (!liz_app_detach())
         return;
+    if (resolved)
+        liz_apps_exec(&handler, path); /* only returns if it could not run */
     execlp("xdg-open", "xdg-open", path, (char*)NULL);
+    _exit(127);
+}
+
+void liz_app_open_row_with(liz_app* app, int row, const liz_desktop_app* with)
+{
+    if (row < 0 || (size_t)row >= app->entry_count || !with)
+        return;
+
+    char path[PATH_MAX];
+    if (liz_fs_join(path, sizeof(path), app->cwd, app->entries[row].name) != 0)
+        return;
+
+    if (!liz_app_detach())
+        return;
+    liz_apps_exec(with, path);
     _exit(127);
 }
 
@@ -1223,6 +1251,8 @@ int liz_app_init(liz_app* app)
     app->last_list_visible = -1;
 
     xwindow* win = xc_window_create(120, 120, 900, 600, liz_theme_bg, "lizaveta");
+    if (win)
+        xc_set_class(win, "lizaveta", "lizaveta");
     if (!win)
         return -1;
     app->win = win;
@@ -1234,11 +1264,11 @@ int liz_app_init(liz_app* app)
     win->on_dnd_position = liz_app_dnd_position;
     win->on_dnd_leave = liz_app_dnd_leave;
     win->on_dnd_drop = liz_app_dnd_drop;
-    app->font = xc_font_load(win, "monospace", 13, liz_theme_text);
-    app->font_bold = xc_font_load_style(win, "monospace", 13, "bold", liz_theme_text);
-    app->font_dim = xc_font_load(win, "monospace", 13, liz_theme_text_dim);
-    app->font_accent = xc_font_load(win, "monospace", 13, liz_theme_dir);
-    app->font_error = xc_font_load(win, "monospace", 13, liz_theme_error);
+    app->font = xc_font_load(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, liz_theme_text);
+    app->font_bold = xc_font_load_style(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, "bold", liz_theme_text);
+    app->font_dim = xc_font_load(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, liz_theme_text_dim);
+    app->font_accent = xc_font_load(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, liz_theme_dir);
+    app->font_error = xc_font_load(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, liz_theme_error);
 
     if (!app->font || !app->font_bold || !app->font_dim || !app->font_accent
         || !app->font_error) {
@@ -1254,6 +1284,7 @@ int liz_app_init(liz_app* app)
 
     liz_vim_init(&app->vim);
     liz_sidebar_init(app);
+    liz_icons_init();
 
     char cwd[PATH_MAX];
     if (getcwd(cwd, sizeof(cwd)) == NULL)
@@ -1269,6 +1300,7 @@ void liz_app_quit(liz_app* app)
     liz_preview_shutdown(app);
 
     if (app->win) {
+        liz_icons_shutdown(app->win);
         xc_font_free(app->win, app->font);
         xc_font_free(app->win, app->font_bold);
         xc_font_free(app->win, app->font_dim);

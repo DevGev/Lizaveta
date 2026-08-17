@@ -19,6 +19,7 @@
 #include <X11/keysym.h>
 #include <X11/Xft/Xft.h>
 #include <X11/extensions/Xrender.h>
+#include <X11/extensions/Xrandr.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -74,9 +75,11 @@ typedef struct xwindow {
     xc_color bg;
 
     Pixmap buffer;   /* backing store, size == window */
+    Picture buffer_pic; /* XRender handle on `buffer`, for alpha compositing */
     XftDraw* xftdraw;
 
-    Atom wm_delete;
+    Atom wm_protocols; /* WM_PROTOCOLS, the message_type the WM sends */
+    Atom wm_delete;    /* WM_DELETE_WINDOW, which arrives inside it */
 
     /* CLIPBOARD selection ownership */
     Atom clip_sel;      /* CLIPBOARD */
@@ -145,9 +148,26 @@ typedef struct {
     XftColor color;
 } xc_font;
 
+/* An RGBA image living on the X server, composited with XRender. */
+typedef struct {
+    Pixmap pixmap;
+    Picture picture;
+    int width;
+    int height;
+} xc_image;
+
+static inline int xc_native_byte_order(void)
+{
+    uint16_t probe = 1;
+    return *(const uint8_t*)&probe ? LSBFirst : MSBFirst;
+}
+
 static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_color bg, const char* title);
 static inline void xc_window_destroy(xwindow* w);
 static inline void xc_set_managed(xwindow* w, bool managed);
+static inline void xc_set_class(xwindow* w, const char* instance, const char* class_name);
+static inline void xc_set_dialog(xwindow* w);
+static inline void xc_center_on_monitor(xwindow* w, int width, int height);
 static inline void xc_run(xwindow* w);
 
 /* ---- clipboard API ----
@@ -186,6 +206,9 @@ static inline void xc_flip(xwindow* w);
 static inline xc_font* xc_font_load(xwindow* w, const char* family, double px, xc_color color);
 static inline xc_font* xc_font_load_style(xwindow* w, const char* family, double px, const char* style, xc_color color);
 static inline void xc_font_free(xwindow* w, xc_font* f);
+static inline xc_image* xc_image_from_rgba(xwindow* w, const unsigned char* rgba, int width, int height);
+static inline void xc_image_draw(xwindow* w, const xc_image* img, int x, int y);
+static inline void xc_image_free(xwindow* w, xc_image* img);
 static inline void xc_font_metrics(xc_font* f, int* ascent, int* descent);
 
 static inline int xc_color_shift(unsigned long mask)
@@ -237,9 +260,14 @@ static inline void xc_resize_buffer(xwindow* w)
         return;
     Pixmap next = XCreatePixmap(w->display, w->window, w->width, w->height, w->depth);
     XftDrawChange(w->xftdraw, next);
+    if (w->buffer_pic != None)
+        XRenderFreePicture(w->display, w->buffer_pic);
     if (w->buffer != None)
         XFreePixmap(w->display, w->buffer);
     w->buffer = next;
+
+    XRenderPictFormat* fmt = XRenderFindVisualFormat(w->display, w->visual);
+    w->buffer_pic = fmt ? XRenderCreatePicture(w->display, w->buffer, fmt, 0, NULL) : None;
 }
 
 static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_color bg, const char* title)
@@ -264,6 +292,7 @@ static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_
     w->running = false;
     w->events = NULL;
     w->buffer = None;
+    w->buffer_pic = None;
 
     XSetWindowAttributes attr;
     memset(&attr, 0, sizeof(attr));
@@ -280,7 +309,9 @@ static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_
     w->gc = XCreateGC(w->display, w->window, 0, NULL);
     XSetLineAttributes(w->display, w->gc, 1, LineSolid, CapButt, JoinMiter);
 
-    /* WM_DELETE_WINDOW so clicking the close button generates XC_EVENT_CLOSE */
+    /* WM_DELETE_WINDOW so a close request from the window manager, whether
+     * from a titlebar button or a keybinding, generates XC_EVENT_CLOSE */
+    w->wm_protocols = XInternAtom(w->display, "WM_PROTOCOLS", False);
     w->wm_delete = XInternAtom(w->display, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(w->display, w->window, &w->wm_delete, 1);
 
@@ -339,6 +370,97 @@ static inline void xc_grab_focus(xwindow* w)
     XGetInputFocus(w->display, &focus, &revert);
     if (focus == None || focus == PointerRoot || focus == w->window)
         XSetInputFocus(w->display, w->window, RevertToParent, CurrentTime);
+}
+
+/* WM_CLASS, which is how window managers address a window in their rules.
+ * `instance` names this particular window, `class_name` the application. */
+static inline void xc_set_class(xwindow* w, const char* instance, const char* class_name)
+{
+    XClassHint hint;
+    hint.res_name = (char*)instance;
+    hint.res_class = (char*)class_name;
+    XSetClassHint(w->display, w->window, &hint);
+}
+
+/* Marks the window as a dialog, which is what makes a tiling window
+ * manager float it instead of giving it a tile. Window managers read this
+ * when the window is mapped, so it has to be set before xc_run. */
+static inline void xc_set_dialog(xwindow* w)
+{
+    Atom type = XInternAtom(w->display, "_NET_WM_WINDOW_TYPE", False);
+    Atom dialog = XInternAtom(w->display, "_NET_WM_WINDOW_TYPE_DIALOG", False);
+    XChangeProperty(w->display, w->window, type, XA_ATOM, 32, PropModeReplace,
+                    (unsigned char*)&dialog, 1);
+}
+
+/* The monitor the pointer is on, in root coordinates.
+ *
+ * X presents a multi-head setup as one wide screen, so centring on the
+ * screen puts a window across the seam between two monitors. RandR is what
+ * knows where one monitor ends and the next begins; without it the whole
+ * screen is the answer, which is the single-monitor case anyway. */
+static inline void xc_pointer_monitor(xwindow* w, int* out_x, int* out_y,
+                                      int* out_w, int* out_h)
+{
+    *out_x = 0;
+    *out_y = 0;
+    *out_w = DisplayWidth(w->display, w->screen);
+    *out_h = DisplayHeight(w->display, w->screen);
+
+    Window root = RootWindow(w->display, w->screen);
+    Window child;
+    int px = 0, py = 0, win_x = 0, win_y = 0;
+    unsigned int mask = 0;
+    if (!XQueryPointer(w->display, root, &root, &child, &px, &py, &win_x, &win_y, &mask))
+        return;
+
+    int count = 0;
+    XRRMonitorInfo* monitors = XRRGetMonitors(w->display, root, True, &count);
+    if (!monitors)
+        return;
+    for (int i = 0; i < count; i++) {
+        if (px >= monitors[i].x && px < monitors[i].x + monitors[i].width
+            && py >= monitors[i].y && py < monitors[i].y + monitors[i].height) {
+            *out_x = monitors[i].x;
+            *out_y = monitors[i].y;
+            *out_w = monitors[i].width;
+            *out_h = monitors[i].height;
+            break;
+        }
+    }
+    XRRFreeMonitors(monitors);
+}
+
+/* Resizes to `width` x `height` and centres on the monitor the pointer is
+ * on, which is the one the application that asked for the window is being
+ * used on. The size hints are updated alongside, since a window manager
+ * placing a floating window goes by those rather than the geometry alone. */
+static inline void xc_center_on_monitor(xwindow* w, int width, int height)
+{
+    int mon_x = 0, mon_y = 0, mon_w = 0, mon_h = 0;
+    xc_pointer_monitor(w, &mon_x, &mon_y, &mon_w, &mon_h);
+
+    if (width > mon_w)
+        width = mon_w;
+    if (height > mon_h)
+        height = mon_h;
+
+    int x = mon_x + (mon_w - width) / 2;
+    int y = mon_y + (mon_h - height) / 2;
+
+    XSizeHints size;
+    memset(&size, 0, sizeof(size));
+    size.flags = PPosition | PSize | USPosition | USSize;
+    size.x = x;
+    size.y = y;
+    size.width = width;
+    size.height = height;
+    XSetWMNormalHints(w->display, w->window, &size);
+
+    XMoveResizeWindow(w->display, w->window, x, y, (unsigned)width, (unsigned)height);
+    w->width = width;
+    w->height = height;
+    xc_resize_buffer(w);
 }
 
 static inline void xc_set_managed(xwindow* w, bool managed)
@@ -989,7 +1111,6 @@ static inline void xc_run(xwindow* w)
 {
     XMapRaised(w->display, w->window);
     XFlush(w->display);
-    xc_grab_focus(w);
 
     w->running = true;
     XEvent xe;
@@ -1041,6 +1162,11 @@ static inline void xc_run(xwindow* w)
             if (xe.xexpose.count == 0)
                 ev.type = XC_EVENT_EXPOSE;
             break;
+        /* focus only once the server reports the window viewable: an
+         * XSetInputFocus on an unmapped window is a BadMatch */
+        case MapNotify:
+            xc_grab_focus(w);
+            continue;
         case ConfigureNotify:
             if (xe.xconfigure.width != w->width || xe.xconfigure.height != w->height) {
                 w->width = xe.xconfigure.width;
@@ -1053,8 +1179,12 @@ static inline void xc_run(xwindow* w)
             break;
         case ClientMessage: {
             Atom mt = (Atom)xe.xclient.message_type;
-            if (mt == w->wm_delete) {
-                ev.type = XC_EVENT_CLOSE;
+            /* A WM_PROTOCOLS message names the actual protocol in
+             * data.l[0]; the XDND messages below instead carry their own
+             * atom as the message type. */
+            if (mt == w->wm_protocols) {
+                if ((Atom)xe.xclient.data.l[0] == w->wm_delete)
+                    ev.type = XC_EVENT_CLOSE;
             } else if (mt == w->xdnd_enter) {
                 xc_dnd_handle_enter(w, &xe.xclient);
             } else if (mt == w->xdnd_position) {
@@ -1186,6 +1316,8 @@ static inline void xc_window_destroy(xwindow* w)
         return;
     if (w->xftdraw)
         XftDrawDestroy(w->xftdraw);
+    if (w->buffer_pic != None)
+        XRenderFreePicture(w->display, w->buffer_pic);
     if (w->buffer != None)
         XFreePixmap(w->display, w->buffer);
     if (w->gc)
@@ -1235,6 +1367,90 @@ static inline int xc_text(xwindow* w, int x, int y, const char* text, int len, x
     XGlyphInfo ext;
     XftTextExtentsUtf8(w->display, f->xft, (const FcChar8*)text, len, &ext);
     return ext.xOff;
+}
+
+/* Uploads straight (non-premultiplied) RGBA into a server-side ARGB32
+ * pixmap ready for alpha compositing. XRender expects premultiplied
+ * components, so the multiply happens here, once per image, rather than on
+ * every draw. */
+static inline xc_image* xc_image_from_rgba(xwindow* w, const unsigned char* rgba,
+                                           int width, int height)
+{
+    if (width < 1 || height < 1)
+        return NULL;
+
+    XRenderPictFormat* fmt = XRenderFindStandardFormat(w->display, PictStandardARGB32);
+    if (!fmt)
+        return NULL;
+
+    uint32_t* words = (uint32_t*)malloc((size_t)width * (size_t)height * 4);
+    if (!words)
+        return NULL;
+    for (int i = 0; i < width * height; i++) {
+        unsigned a = rgba[i * 4 + 3];
+        unsigned r = rgba[i * 4 + 0] * a / 255;
+        unsigned g = rgba[i * 4 + 1] * a / 255;
+        unsigned b = rgba[i * 4 + 2] * a / 255;
+        words[i] = ((uint32_t)a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    Pixmap pix = XCreatePixmap(w->display, DefaultRootWindow(w->display),
+                               (unsigned)width, (unsigned)height, 32);
+
+    /* The image is described in this machine's byte order; XPutImage swaps
+     * for the server when they disagree. */
+    XImage img;
+    memset(&img, 0, sizeof(img));
+    img.width = width;
+    img.height = height;
+    img.format = ZPixmap;
+    img.data = (char*)words;
+    img.byte_order = xc_native_byte_order();
+    img.bitmap_unit = 32;
+    img.bitmap_bit_order = img.byte_order;
+    img.bitmap_pad = 32;
+    img.depth = 32;
+    img.bytes_per_line = width * 4;
+    img.bits_per_pixel = 32;
+    img.red_mask = 0x00ff0000;
+    img.green_mask = 0x0000ff00;
+    img.blue_mask = 0x000000ff;
+    XInitImage(&img);
+
+    GC gc = XCreateGC(w->display, pix, 0, NULL);
+    XPutImage(w->display, pix, gc, &img, 0, 0, 0, 0, (unsigned)width, (unsigned)height);
+    XFreeGC(w->display, gc);
+    free(words);
+
+    xc_image* out = (xc_image*)calloc(1, sizeof(xc_image));
+    if (!out) {
+        XFreePixmap(w->display, pix);
+        return NULL;
+    }
+    out->pixmap = pix;
+    out->picture = XRenderCreatePicture(w->display, pix, fmt, 0, NULL);
+    out->width = width;
+    out->height = height;
+    return out;
+}
+
+static inline void xc_image_draw(xwindow* w, const xc_image* img, int x, int y)
+{
+    if (!img || w->buffer_pic == None)
+        return;
+    XRenderComposite(w->display, PictOpOver, img->picture, None, w->buffer_pic,
+                     0, 0, 0, 0, x, y, (unsigned)img->width, (unsigned)img->height);
+}
+
+static inline void xc_image_free(xwindow* w, xc_image* img)
+{
+    if (!img)
+        return;
+    if (img->picture != None)
+        XRenderFreePicture(w->display, img->picture);
+    if (img->pixmap != None)
+        XFreePixmap(w->display, img->pixmap);
+    free(img);
 }
 
 static inline void xc_flip(xwindow* w)

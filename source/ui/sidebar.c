@@ -12,9 +12,11 @@
 
 #include <libudev.h>
 
+#include "icons/icons.h"
 #include "ui/theme.h"
 
 #define LIZ_SIDEBAR_PAD_X 10
+#define LIZ_SIDEBAR_ICON_GAP 6 /* between an item's icon and its label */
 
 static int liz_sidebar_top(void)
 {
@@ -26,17 +28,19 @@ static int liz_sidebar_bottom(xwindow* w)
     return w->height - LIZ_UI_STATUS_H;
 }
 
-static void liz_sidebar_add_pinned(liz_app* app, const char* label, const char* path)
+static void liz_sidebar_add_pinned(liz_app* app, const char* label, const char* path,
+                                  const char* icon)
 {
     if (app->sidebar.pinned_count >= LIZ_SIDEBAR_PINNED_MAX)
         return;
     liz_sidebar_entry* e = &app->sidebar.pinned[app->sidebar.pinned_count++];
     snprintf(e->label, sizeof(e->label), "%.*s", (int)sizeof(e->label) - 1, label);
     snprintf(e->path, sizeof(e->path), "%.*s", (int)sizeof(e->path) - 1, path);
+    snprintf(e->icon, sizeof(e->icon), "%.*s", (int)sizeof(e->icon) - 1, icon);
 }
 
 static void liz_sidebar_add_device(liz_app* app, const char* label, const char* path,
-                                  const char* dev)
+                                  const char* dev, const char* icon)
 {
     if (app->sidebar.devices_count >= LIZ_SIDEBAR_DEVICES_MAX)
         return;
@@ -45,6 +49,7 @@ static void liz_sidebar_add_device(liz_app* app, const char* label, const char* 
     snprintf(e->path, sizeof(e->path), "%.*s", (int)sizeof(e->path) - 1, path);
     snprintf(e->dev, sizeof(e->dev), "%.*s", (int)sizeof(e->dev) - 1,
              dev ? dev : "");
+    snprintf(e->icon, sizeof(e->icon), "%.*s", (int)sizeof(e->icon) - 1, icon);
 }
 
 /* Writes home + "/" + leaf into out, clamping home so the result fits. */
@@ -132,7 +137,7 @@ static bool liz_sidebar_device_name(struct udev* udev_ctx, const char* dev,
 static void liz_sidebar_refresh_devices(liz_app* app)
 {
     app->sidebar.devices_count = 0;
-    liz_sidebar_add_device(app, "File system", "/", "");
+    liz_sidebar_add_device(app, "File system", "/", "", "drive-harddisk-root");
 
     FILE* f = fopen("/proc/mounts", "r");
     if (!f)
@@ -167,7 +172,7 @@ static void liz_sidebar_refresh_devices(liz_app* app)
             leaf = (leaf && leaf[1]) ? leaf + 1 : mnt;
             snprintf(name, sizeof(name), "%.*s", (int)sizeof(name) - 1, leaf);
         }
-        liz_sidebar_add_device(app, name, mnt, dev);
+        liz_sidebar_add_device(app, name, mnt, dev, "drive-removable-media");
     }
     free(line);
 
@@ -190,15 +195,15 @@ void liz_sidebar_init(liz_app* app)
     }
     snprintf(home, sizeof(home), "%s", h);
 
-    liz_sidebar_add_pinned(app, "Home", home);
+    liz_sidebar_add_pinned(app, "Home", home, "user-home");
 
     char sub[PATH_MAX];
     liz_sidebar_sub(sub, sizeof(sub), home, "/Desktop");
-    liz_sidebar_add_pinned(app, "Desktop", sub);
+    liz_sidebar_add_pinned(app, "Desktop", sub, "user-desktop");
     liz_sidebar_sub(sub, sizeof(sub), home, "/Downloads");
-    liz_sidebar_add_pinned(app, "Downloads", sub);
+    liz_sidebar_add_pinned(app, "Downloads", sub, "folder-download");
     liz_sidebar_sub(sub, sizeof(sub), home, "/Pictures");
-    liz_sidebar_add_pinned(app, "Pictures", sub);
+    liz_sidebar_add_pinned(app, "Pictures", sub, "folder-pictures");
 
     const char* xdg_data = getenv("XDG_DATA_HOME");
     if (xdg_data && xdg_data[0]) {
@@ -206,7 +211,7 @@ void liz_sidebar_init(liz_app* app)
     } else {
         liz_sidebar_sub(sub, sizeof(sub), home, "/.local/share/Trash");
     }
-    liz_sidebar_add_pinned(app, "Trash", sub);
+    liz_sidebar_add_pinned(app, "Trash", sub, "user-trash");
 
     liz_sidebar_refresh_devices(app);
 }
@@ -238,11 +243,15 @@ int liz_sidebar_item_at(liz_app* app, int y)
 }
 
 static void liz_sidebar_draw_item(liz_app* app, xwindow* w, const liz_sidebar_entry* e,
-                                 int idx, int y, int text_x, int max_w,
+                                 int idx, int y, int icon_x, int text_x, int max_w,
                                  int ascent, int descent)
 {
     if (idx == app->sidebar.hover_item)
         xc_rect(w, 0, y, LIZ_UI_SIDEBAR_W, LIZ_UI_ROW_H, liz_theme_hover_bg);
+
+    const xc_image* icon = liz_icons_by_name(w, e->icon, liz_theme_text);
+    if (icon)
+        xc_image_draw(w, icon, icon_x, y + (LIZ_UI_ROW_H - LIZ_ICON_SIZE) / 2);
 
     int ty = y + (LIZ_UI_ROW_H - (ascent + descent)) / 2 + ascent;
     liz_ui_text_clip(w, text_x, ty, e->label, (int)strlen(e->label), app->font, max_w);
@@ -277,30 +286,35 @@ void liz_sidebar_draw(liz_app* app)
 
     int ascent = 0, descent = 0;
     xc_font_metrics(app->font, &ascent, &descent);
-    int text_x = LIZ_SIDEBAR_PAD_X;
+    /* section headers keep the outer padding; items are indented past
+     * their icon so the labels line up in one column */
+    int icon_x = LIZ_SIDEBAR_PAD_X;
+    int text_x = icon_x + LIZ_ICON_SIZE + LIZ_SIDEBAR_ICON_GAP;
     int max_w = LIZ_UI_SIDEBAR_W - text_x - LIZ_UI_PAD;
 
     int y = top;
-    liz_sidebar_draw_header(w, "Pinned", 6, y, text_x, app->font_dim, ascent, descent);
+    liz_sidebar_draw_header(w, "Pinned", 6, y, LIZ_SIDEBAR_PAD_X, app->font_dim, ascent, descent);
     y += LIZ_UI_ROW_H;
 
     int idx = 0;
     for (int i = 0; i < app->sidebar.pinned_count; i++, idx++) {
         if (y + LIZ_UI_ROW_H > bottom)
             return;
-        liz_sidebar_draw_item(app, w, &app->sidebar.pinned[i], idx, y, text_x, max_w, ascent, descent);
+        liz_sidebar_draw_item(app, w, &app->sidebar.pinned[i], idx, y, icon_x, text_x,
+                              max_w, ascent, descent);
         y += LIZ_UI_ROW_H;
     }
 
     if (y + LIZ_UI_ROW_H > bottom)
         return;
-    liz_sidebar_draw_header(w, "Devices", 7, y, text_x, app->font_dim, ascent, descent);
+    liz_sidebar_draw_header(w, "Devices", 7, y, LIZ_SIDEBAR_PAD_X, app->font_dim, ascent, descent);
     y += LIZ_UI_ROW_H;
 
     for (int i = 0; i < app->sidebar.devices_count; i++, idx++) {
         if (y + LIZ_UI_ROW_H > bottom)
             break;
-        liz_sidebar_draw_item(app, w, &app->sidebar.devices[i], idx, y, text_x, max_w, ascent, descent);
+        liz_sidebar_draw_item(app, w, &app->sidebar.devices[i], idx, y, icon_x, text_x,
+                              max_w, ascent, descent);
         y += LIZ_UI_ROW_H;
     }
 }

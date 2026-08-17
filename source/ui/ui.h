@@ -13,6 +13,12 @@
 #define LIZ_UI_PAD       8
 #define LIZ_UI_SIDEBAR_W 180
 
+/* The UI font, named once so it can be changed in one place. The size is
+ * in pixels rather than points, so it tracks LIZ_UI_ROW_H instead of the
+ * DPI the display reports. */
+#define LIZ_UI_FONT      "monospace"
+#define LIZ_UI_FONT_PX   13
+
 /* Format `size` bytes as a compact human readable string. */
 void liz_ui_format_size(char* buf, size_t bufsz, off_t size);
 

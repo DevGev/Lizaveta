@@ -2,21 +2,31 @@
 
 #include <string.h>
 
+#include "apps/apps.h"
+#include "fs/fs.h"
 #include "ui/newfolder.h"
 #include "ui/rename.h"
 #include "ui/theme.h"
 
-#define LIZ_MENU_W       180
+#define LIZ_MENU_W       180 /* the narrowest a menu gets */
+#define LIZ_MENU_W_MAX   360
 #define LIZ_MENU_PAD_X   10
 #define LIZ_MENU_PAD_Y   4
 
-static void liz_menu_add(liz_context_menu* m, liz_menu_action action, const char* label)
+static void liz_menu_add_data(liz_context_menu* m, liz_menu_action action,
+                             const char* label, int data)
 {
     if (m->item_count >= LIZ_MENU_ITEMS_MAX)
         return;
     m->items[m->item_count].action = action;
     m->items[m->item_count].label = label;
+    m->items[m->item_count].data = data;
     m->item_count++;
+}
+
+static void liz_menu_add(liz_context_menu* m, liz_menu_action action, const char* label)
+{
+    liz_menu_add_data(m, action, label, 0);
 }
 
 static void liz_menu_place(liz_app* app, int x, int y);
@@ -25,6 +35,7 @@ void liz_menu_open(liz_app* app, int x, int y, int row)
 {
     liz_context_menu* m = &app->menu;
     m->item_count = 0;
+    m->app_count = 0;
     m->hover = -1;
     m->row = row;
     m->source = LIZ_MENU_SRC_LIST;
@@ -53,6 +64,18 @@ void liz_menu_open(liz_app* app, int x, int y, int row)
 
             bool is_dotdot = strcmp(app->entries[row].name, "..") == 0;
             liz_menu_add(m, LIZ_MENU_OPEN, "Open");
+
+            /* The application list is gathered now rather than when the
+             * item is clicked, so that "Open with" is only offered when
+             * something would actually be in it. */
+            if (app->entries[row].type != LIZ_FS_DIR) {
+                char path[PATH_MAX];
+                if (liz_fs_join(path, sizeof(path), app->cwd, app->entries[row].name) == 0)
+                    m->app_count = liz_apps_candidates(path, m->apps, LIZ_APPS_MAX);
+                if (m->app_count > 0)
+                    liz_menu_add(m, LIZ_MENU_OPEN_WITH, "Open with...");
+            }
+
             if (!is_dotdot)
                 liz_menu_add(m, LIZ_MENU_RENAME, "Rename");
             liz_menu_add(m, LIZ_MENU_COPY, "Copy");
@@ -73,6 +96,7 @@ void liz_menu_open_sidebar(liz_app* app, int x, int y, int index, bool is_device
 {
     liz_context_menu* m = &app->menu;
     m->item_count = 0;
+    m->app_count = 0;
     m->hover = -1;
     m->row = -1;
     m->source = LIZ_MENU_SRC_SIDEBAR;
@@ -95,7 +119,21 @@ void liz_menu_open_sidebar(liz_app* app, int x, int y, int index, bool is_device
 static void liz_menu_place(liz_app* app, int x, int y)
 {
     liz_context_menu* m = &app->menu;
+
+    /* application names are whatever their desktop entry says, so the menu
+     * grows to fit rather than truncating them at a fixed width */
     int mw = LIZ_MENU_W;
+    for (int i = 0; i < m->item_count; i++) {
+        int tw = 0;
+        xc_text_measure(app->win, m->items[i].label, (int)strlen(m->items[i].label),
+                        app->font, &tw, NULL);
+        if (tw + 2 * LIZ_MENU_PAD_X > mw)
+            mw = tw + 2 * LIZ_MENU_PAD_X;
+    }
+    if (mw > LIZ_MENU_W_MAX)
+        mw = LIZ_MENU_W_MAX;
+    m->width = mw;
+
     int mh = m->item_count * LIZ_UI_ROW_H + 2 * LIZ_MENU_PAD_Y;
     if (x + mw > app->win->width)
         x = app->win->width - mw;
@@ -122,7 +160,7 @@ static int liz_menu_hit(liz_app* app, int x, int y)
     liz_context_menu* m = &app->menu;
     if (!m->active)
         return -1;
-    int mw = LIZ_MENU_W;
+    int mw = m->width;
     int mh = m->item_count * LIZ_UI_ROW_H + 2 * LIZ_MENU_PAD_Y;
     if (x < m->x || x >= m->x + mw || y < m->y || y >= m->y + mh)
         return -1;
@@ -147,11 +185,34 @@ static const liz_sidebar_entry* liz_menu_sidebar_entry(const liz_app* app)
     return NULL;
 }
 
-static void liz_menu_run(liz_app* app, liz_menu_action action)
+/* Replaces the menu's items with the applications gathered when it was
+ * opened, in place, so the list appears where the pointer already is. */
+static void liz_menu_show_apps(liz_app* app)
 {
+    liz_context_menu* m = &app->menu;
+    int x = m->x;
+    int y = m->y;
+
+    m->item_count = 0;
+    m->hover = -1;
+    for (int i = 0; i < m->app_count; i++)
+        liz_menu_add_data(m, LIZ_MENU_OPEN_WITH_APP, m->apps[i].name, i);
+
+    liz_menu_place(app, x, y);
+}
+
+static void liz_menu_run(liz_app* app, const liz_menu_item* item)
+{
+    liz_menu_action action = item->action;
     switch (action) {
     case LIZ_MENU_OPEN:
         liz_app_open_row(app, app->menu.row);
+        break;
+    case LIZ_MENU_OPEN_WITH:
+        break; /* handled before the menu closes */
+    case LIZ_MENU_OPEN_WITH_APP:
+        if (item->data >= 0 && item->data < app->menu.app_count)
+            liz_app_open_row_with(app, app->menu.row, &app->menu.apps[item->data]);
         break;
     case LIZ_MENU_RENAME:
         liz_rename_start(app);
@@ -189,18 +250,24 @@ static void liz_menu_run(liz_app* app, liz_menu_action action)
 void liz_menu_handle_button(liz_app* app, xc_event ev)
 {
     int idx = liz_menu_hit(app, ev.x, ev.y);
-    liz_menu_action action = LIZ_MENU_OPEN;
     /* only a left click activates an item; a right click (or any other
      * button) just dismisses the menu, so a right-click double click
      * never runs the item that happens to sit under the pointer */
-    bool run = idx >= 0 && ev.button == 1;
-    if (run)
-        action = app->menu.items[idx].action;
+    if (idx < 0 || ev.button != 1) {
+        liz_menu_close(app);
+        return;
+    }
+
+    /* "Open with" is the one item that leads somewhere instead of doing
+     * something, so the menu stays up and swaps its contents */
+    liz_menu_item item = app->menu.items[idx];
+    if (item.action == LIZ_MENU_OPEN_WITH) {
+        liz_menu_show_apps(app);
+        return;
+    }
 
     liz_menu_close(app);
-
-    if (run)
-        liz_menu_run(app, action);
+    liz_menu_run(app, &item);
 }
 
 void liz_menu_handle_motion(liz_app* app, xc_event ev)
@@ -224,7 +291,7 @@ void liz_menu_draw(liz_app* app)
         return;
 
     xwindow* w = app->win;
-    int mw = LIZ_MENU_W;
+    int mw = m->width;
     int mh = m->item_count * LIZ_UI_ROW_H + 2 * LIZ_MENU_PAD_Y;
 
     xc_rect(w, m->x, m->y, mw, mh, liz_theme_panel);
@@ -243,6 +310,7 @@ void liz_menu_draw(liz_app* app)
             xc_rect(w, m->x + 1, iy, mw - 2, LIZ_UI_ROW_H, liz_theme_hover_bg);
         int text_y = iy + (LIZ_UI_ROW_H - line_h) / 2 + ascent;
         const char* label = m->items[i].label;
-        xc_text(w, m->x + LIZ_MENU_PAD_X, text_y, label, (int)strlen(label), app->font);
+        liz_ui_text_clip(w, m->x + LIZ_MENU_PAD_X, text_y, label, (int)strlen(label),
+                        app->font, mw - 2 * LIZ_MENU_PAD_X);
     }
 }
