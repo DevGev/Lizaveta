@@ -24,6 +24,8 @@
  * back to a linear fnmatch scan. */
 #define LIZ_MIME_EXT_SLOTS 4096
 #define LIZ_MIME_EXT_MAX   32
+#define LIZ_MIME_GLOB_HASH_SLOTS 256
+#define LIZ_MIME_GLOB_EXT_MAX    16
 
 typedef struct {
     char ext[LIZ_MIME_EXT_MAX]; /* empty slot when ext[0] == '\0' */
@@ -45,6 +47,13 @@ typedef struct {
     char* value;
 } liz_mime_pair;
 
+typedef struct liz_mime_glob_node {
+    size_t index;
+    struct liz_mime_glob_node* next;
+} liz_mime_glob_node;
+
+static liz_mime_glob_node* g_glob_hash[LIZ_MIME_GLOB_HASH_SLOTS];
+
 static liz_mime_ext* g_ext;         /* LIZ_MIME_EXT_SLOTS entries */
 static liz_mime_glob* g_globs;      /* patterns the extension hash cannot hold */
 static size_t g_glob_count;
@@ -57,6 +66,7 @@ static size_t g_alias_count;
 static liz_mime_pair* g_subclasses; /* mime/subclasses, key is the child */
 static size_t g_subclass_count;
 static bool g_ready;
+static bool g_glob_hash_ready;
 
 static char* liz_mime_slurp(const char* path)
 {
@@ -267,6 +277,43 @@ static void liz_mime_generic_line(char* line)
     liz_mime_icon_line(line, &g_generic, &g_generic_count);
 }
 
+static const char* liz_mime_glob_last_ext(const char* pattern, char* out, size_t outsz)
+{
+    const char* last_dot = NULL;
+    const char* p = pattern;
+    while (*p) {
+        if (*p == '.')
+            last_dot = p;
+        else if (*p == '*' || *p == '?' || *p == '[')
+            return NULL;
+        p++;
+    }
+    if (!last_dot || !last_dot[1])
+        return NULL;
+    size_t len = (size_t)(p - last_dot - 1);
+    if (len >= outsz)
+        len = outsz - 1;
+    memcpy(out, last_dot + 1, len);
+    out[len] = '\0';
+    return out;
+}
+
+static void liz_mime_build_glob_hash(void)
+{
+    for (size_t i = 0; i < g_glob_count; i++) {
+        char ext[LIZ_MIME_GLOB_EXT_MAX];
+        if (!liz_mime_glob_last_ext(g_globs[i].pattern, ext, sizeof(ext)))
+            continue;
+        unsigned h = liz_mime_hash(ext) % LIZ_MIME_GLOB_HASH_SLOTS;
+        liz_mime_glob_node* node = (liz_mime_glob_node*)malloc(sizeof(*node));
+        if (!node)
+            continue;
+        node->index = i;
+        node->next = g_glob_hash[h];
+        g_glob_hash[h] = node;
+    }
+}
+
 static const char* liz_mime_icon_find(const liz_mime_pair* list, size_t count,
                                       const char* mime)
 {
@@ -320,6 +367,8 @@ void liz_mime_init(void)
             free(text);
         }
     }
+    liz_mime_build_glob_hash();
+    g_glob_hash_ready = true;
 }
 
 void liz_mime_shutdown(void)
@@ -329,6 +378,15 @@ void liz_mime_shutdown(void)
         free(g_globs[i].mime);
     }
     free(g_globs);
+    for (unsigned i = 0; i < LIZ_MIME_GLOB_HASH_SLOTS; i++) {
+        liz_mime_glob_node* n = g_glob_hash[i];
+        while (n) {
+            liz_mime_glob_node* next = n->next;
+            free(n);
+            n = next;
+        }
+        g_glob_hash[i] = NULL;
+    }
     for (size_t i = 0; i < g_specific_count; i++) {
         free(g_specific[i].key);
         free(g_specific[i].value);
@@ -363,6 +421,7 @@ void liz_mime_shutdown(void)
     g_subclass_count = 0;
     g_ext = NULL;
     g_ready = false;
+    g_glob_hash_ready = false;
 }
 
 /* A literal pattern beats every wildcard; between two wildcards the longer
@@ -375,7 +434,26 @@ static const char* liz_mime_match(const char* filename)
     size_t wild_len = 0;
     int wild_weight = -1;
 
+    char ext_buf[LIZ_MIME_EXT_MAX];
+    const char* last_ext = NULL;
+    const char* last_dot = strrchr(filename, '.');
+    if (last_dot && last_dot[1]) {
+        size_t elen = strlen(last_dot + 1);
+        if (elen < sizeof(ext_buf)) {
+            memcpy(ext_buf, last_dot + 1, elen);
+            ext_buf[elen] = '\0';
+            last_ext = ext_buf;
+        }
+    }
+
     for (size_t i = 0; i < g_glob_count; i++) {
+        if (last_ext && g_glob_hash_ready) {
+            char pat_ext[LIZ_MIME_GLOB_EXT_MAX];
+            if (liz_mime_glob_last_ext(g_globs[i].pattern, pat_ext, sizeof(pat_ext))) {
+                if (strcasecmp(pat_ext, last_ext) != 0)
+                    continue;
+            }
+        }
         const liz_mime_glob* g = &g_globs[i];
         int flags = g->case_sensitive ? 0 : FNM_CASEFOLD;
         if (fnmatch(g->pattern, filename, flags) != 0)
@@ -455,7 +533,26 @@ int liz_mime_types(const char* filename, char out[][LIZ_MIME_MAX], int max)
 
     int n = 0;
 
+    char ext_buf[LIZ_MIME_EXT_MAX];
+    const char* last_ext = NULL;
+    const char* last_dot = strrchr(filename, '.');
+    if (last_dot && last_dot[1]) {
+        size_t elen = strlen(last_dot + 1);
+        if (elen < sizeof(ext_buf)) {
+            memcpy(ext_buf, last_dot + 1, elen);
+            ext_buf[elen] = '\0';
+            last_ext = ext_buf;
+        }
+    }
+
     for (size_t i = 0; i < g_glob_count && n < max; i++) {
+        if (last_ext && g_glob_hash_ready) {
+            char pat_ext[LIZ_MIME_GLOB_EXT_MAX];
+            if (liz_mime_glob_last_ext(g_globs[i].pattern, pat_ext, sizeof(pat_ext))) {
+                if (strcasecmp(pat_ext, last_ext) != 0)
+                    continue;
+            }
+        }
         const liz_mime_glob* g = &g_globs[i];
         int flags = g->case_sensitive ? 0 : FNM_CASEFOLD;
         if (fnmatch(g->pattern, filename, flags) == 0)
