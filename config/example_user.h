@@ -22,6 +22,18 @@
 // #define LIZ_THEME_THUNAR
 
 
+/* ---- Font ---------------------------------------------------------------- *
+ *
+ * Any fontconfig family name. The size is in pixels.
+ */
+
+// #undef LIZ_FONT
+// #define LIZ_FONT "monospace"
+
+// #undef LIZ_FONT_SIZE
+// #define LIZ_FONT_SIZE 13
+
+
 /* ---- Keybindings --------------------------------------------------------- *
  *
  * Modifiers: LIZ_MOD_CTRL | LIZ_MOD_ALT | LIZ_MOD_SHIFT | LIZ_MOD_SUPER

@@ -14,6 +14,18 @@
 
 #define LIZ_THEME_DEFAULT
 
+// Font
+
+/* The size is in pixels rather than points, so it tracks LIZ_UI_ROW_H
+ * instead of the DPI the display reports. */
+
+#ifndef LIZ_FONT
+#define LIZ_FONT      "monospace"
+#endif
+#ifndef LIZ_FONT_SIZE
+#define LIZ_FONT_SIZE 13
+#endif
+
 // Keybindings
 
 #ifndef LIZ_BIND_QUIT
