@@ -150,7 +150,8 @@ static void liz_icons_scan_theme(const char* theme, char seen[][LIZ_ICON_THEME_N
                     *comma = '\0';
 
                 int distance = liz_icons_size_distance(index, cursor);
-                if (distance != INT_MAX && ((pass == 0) == (distance == 0))) {
+                if (distance != INT_MAX && distance <= LIZ_ICON_SIZE
+                    && ((pass == 0) == (distance == 0))) {
                     for (int i = 0; i < base_count; i++)
                         liz_icons_add_dir(bases[i], theme, cursor);
                 }
