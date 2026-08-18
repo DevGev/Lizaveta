@@ -96,7 +96,7 @@ Runs as a seperate process, embedded using Xlib.
 |----------|--------|
 | `:noh` | Clear search highlight |
 | `:q` | Quit |
-
+| `:o <command> %s` | Open file with |
 
 ---
 
