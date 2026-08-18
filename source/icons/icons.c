@@ -138,8 +138,8 @@ static void liz_icons_scan_theme(const char* theme, char seen[][LIZ_ICON_THEME_N
 
     /* Only the unscaled Directories key is read: the @2x variants in
      * ScaledDirectories hold icons drawn for twice the nominal size. */
-    char* dirs = (char*)malloc(1 << 16);
-    if (dirs && liz_ini_get(index, NULL, "Directories", dirs, 1 << 16)) {
+    char* dirs = (char*)malloc(strlen(index) + 1);
+    if (dirs && liz_ini_get(index, NULL, "Directories", dirs, strlen(index) + 1)) {
         /* two passes so exact-size directories are searched before the
          * approximate ones, whatever order the theme lists them in */
         for (int pass = 0; pass < 2; pass++) {
