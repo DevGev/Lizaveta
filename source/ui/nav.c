@@ -37,7 +37,12 @@ static int liz_nav_build(liz_app* app)
             size_t vlen = strlen(vpath);
 
             /* filesystem path segments from the archive path */
-            size_t fi = 0;
+            /* root segment */
+            app->nav_sg[n].text = inner;
+            app->nav_sg[n].len = 1;
+            app->nav_sg[n].end = 11; /* past "archive://" + "/" */
+            n++;
+            size_t fi = 1;
             while (fi < alen && n < LIZ_NAV_SEGMENTS) {
                 while (fi < alen && inner[fi] == '/')
                     fi++;
