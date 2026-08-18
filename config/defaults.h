@@ -26,6 +26,23 @@
 #define LIZ_FONT_SIZE 13
 #endif
 
+// Pinned sidebar entries: array of {label, path} pairs.
+// Paths beginning with : are expanded at runtime:
+//   :home:   -> $HOME (or /etc/passwd fallback)
+//   :trash:  -> $XDG_DATA_HOME/Trash or ~/.local/share/Trash
+
+#include <limits.h>
+
+#ifndef LIZ_PINNED
+#define LIZ_PINNED { \
+    {"Home",      ":home:"             }, \
+    {"Desktop",   ":home:/Desktop"     }, \
+    {"Downloads", ":home:/Downloads"   }, \
+    {"Pictures",  ":home:/Pictures"    }, \
+    {"Trash",     ":trash:"            }, \
+}
+#endif
+
 // Keybindings
 
 #ifndef LIZ_BIND_QUIT

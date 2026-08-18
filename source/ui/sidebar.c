@@ -12,6 +12,7 @@
 
 #include <libudev.h>
 
+#include "config.h"
 #include "icons/icons.h"
 #include "ui/theme.h"
 
@@ -50,16 +51,6 @@ static void liz_sidebar_add_device(liz_app* app, const char* label, const char* 
     snprintf(e->dev, sizeof(e->dev), "%.*s", (int)sizeof(e->dev) - 1,
              dev ? dev : "");
     snprintf(e->icon, sizeof(e->icon), "%.*s", (int)sizeof(e->icon) - 1, icon);
-}
-
-/* Writes home + "/" + leaf into out, clamping home so the result fits. */
-static void liz_sidebar_sub(char* out, size_t outsz, const char* home, const char* leaf)
-{
-    int leafsz = (int)strlen(leaf);
-    int max_home = (int)outsz - leafsz - 1;
-    if (max_home < 0)
-        max_home = 0;
-    snprintf(out, outsz, "%.*s%s", max_home, home, leaf);
 }
 
 /* Media mounts are the ones real file managers surface as removable or
@@ -181,6 +172,18 @@ static void liz_sidebar_refresh_devices(liz_app* app)
     fclose(f);
 }
 
+static void liz_sidebar_expand_path(char* out, size_t outsz, const char* path,
+                                    const char* home, const char* trash)
+{
+    if (strncmp(path, ":home:", 6) == 0) {
+        snprintf(out, outsz, "%s%s", home, path + 6);
+    } else if (strncmp(path, ":trash:", 7) == 0) {
+        snprintf(out, outsz, "%s%s", trash, path + 7);
+    } else {
+        snprintf(out, outsz, "%.*s", (int)outsz - 1, path);
+    }
+}
+
 void liz_sidebar_init(liz_app* app)
 {
     app->sidebar.pinned_count = 0;
@@ -195,23 +198,42 @@ void liz_sidebar_init(liz_app* app)
     }
     snprintf(home, sizeof(home), "%s", h);
 
-    liz_sidebar_add_pinned(app, "Home", home, "user-home");
-
-    char sub[PATH_MAX];
-    liz_sidebar_sub(sub, sizeof(sub), home, "/Desktop");
-    liz_sidebar_add_pinned(app, "Desktop", sub, "user-desktop");
-    liz_sidebar_sub(sub, sizeof(sub), home, "/Downloads");
-    liz_sidebar_add_pinned(app, "Downloads", sub, "folder-download");
-    liz_sidebar_sub(sub, sizeof(sub), home, "/Pictures");
-    liz_sidebar_add_pinned(app, "Pictures", sub, "folder-pictures");
-
+    char trash[PATH_MAX];
     const char* xdg_data = getenv("XDG_DATA_HOME");
+    const char* trash_suffix;
+    const char* base;
     if (xdg_data && xdg_data[0]) {
-        liz_sidebar_sub(sub, sizeof(sub), xdg_data, "/Trash");
+        base = xdg_data;
+        trash_suffix = "/Trash";
     } else {
-        liz_sidebar_sub(sub, sizeof(sub), home, "/.local/share/Trash");
+        base = home;
+        trash_suffix = "/.local/share/Trash";
     }
-    liz_sidebar_add_pinned(app, "Trash", sub, "user-trash");
+    size_t baselen = strlen(base);
+    size_t suflen = strlen(trash_suffix);
+    if (baselen + suflen < sizeof(trash)) {
+        memcpy(trash, base, baselen);
+        memcpy(trash + baselen, trash_suffix, suflen + 1);
+    } else {
+        trash[0] = '\0';
+    }
+
+    const char* icons[] = {
+        "user-home", "user-desktop", "folder-download", "folder-pictures",
+        "folder-videos", "folder-music", "folder-documents", "user-trash",
+        "folder", "folder", "folder", "folder",
+        "folder", "folder", "folder", "folder",
+    };
+
+    struct pinned_entry { const char* label; const char* path; };
+    static const struct pinned_entry pinned[] = LIZ_PINNED;
+    int n = (int)(sizeof(pinned) / sizeof(pinned[0]));
+    for (int i = 0; i < n && app->sidebar.pinned_count < LIZ_SIDEBAR_PINNED_MAX; i++) {
+        char resolved[PATH_MAX];
+        liz_sidebar_expand_path(resolved, sizeof(resolved), pinned[i].path, home, trash);
+        const char* icon = (i < 16) ? icons[i] : "folder";
+        liz_sidebar_add_pinned(app, pinned[i].label, resolved, icon);
+    }
 
     liz_sidebar_refresh_devices(app);
 }

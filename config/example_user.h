@@ -34,6 +34,26 @@
 // #define LIZ_FONT_SIZE 13
 
 
+/* ---- Pinned sidebar entries ---------------------------------------------- *
+ *
+ * 2D array of {"Label", "Path"} pairs. Paths beginning with : are expanded
+ * at runtime: :home: -> $HOME, :trash: -> XDG trash directory.
+ * Maximum LIZ_SIDEBAR_PINNED_MAX (16) entries.
+ */
+
+// #undef LIZ_PINNED
+// #define LIZ_PINNED { \
+//     {"Home",      ":home:"              }, \
+//     {"Desktop",   ":home:/Desktop"      }, \
+//     {"Documents", ":home:/Documents"    }, \
+//     {"Downloads", ":home:/Downloads"    }, \
+//     {"Music",     ":home:/Music"        }, \
+//     {"Pictures",  ":home:/Pictures"     }, \
+//     {"Videos",    ":home:/Videos"       }, \
+//     {"Trash",     ":trash:"             }, \
+// }
+
+
 /* ---- Keybindings --------------------------------------------------------- *
  *
  * Modifiers: LIZ_MOD_CTRL | LIZ_MOD_ALT | LIZ_MOD_SHIFT | LIZ_MOD_SUPER
