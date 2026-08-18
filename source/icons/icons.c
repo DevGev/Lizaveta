@@ -442,8 +442,6 @@ void liz_icons_init(void)
     if (!g_dirs || !g_cache || !g_rast)
         return;
 
-    liz_mime_init();
-
     char data[LIZ_XDG_DIRS_MAX][LIZ_XDG_PATH_MAX];
     int data_count = liz_xdg_data_dirs(data, LIZ_XDG_DIRS_MAX);
 
