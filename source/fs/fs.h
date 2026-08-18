@@ -14,6 +14,7 @@ typedef enum {
     LIZ_FS_DIR,     /* directory */
     LIZ_FS_LINK,    /* symbolic link */
     LIZ_FS_SPECIAL, /* socket, fifo, device, ... */
+    LIZ_FS_VIRTUAL, /* entry inside an archive (virtual directory) */
 } liz_fs_type;
 
 typedef struct {

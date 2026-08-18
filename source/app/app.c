@@ -30,6 +30,10 @@
 #include "ui/status.h"
 #include "ui/theme.h"
 
+#ifdef ARCHIVE_SUPPORT
+#include "archive/archive.h"
+#endif
+
 #define LIZ_KEYBIND_COUNT                                                     \
     (sizeof(liz_keybinds) / sizeof(liz_keybinds[0]))
 
@@ -156,13 +160,85 @@ static void liz_app_apply_chooser_filter(liz_app* app, const char* dir,
 void liz_app_navigate(liz_app* app, const char* path)
 {
     char canon[PATH_MAX];
-    if (liz_fs_canonical(canon, sizeof(canon), path) != 0)
-        return;
+    if (liz_fs_canonical(canon, sizeof(canon), path) != 0) {
+        /* might be a virtual path inside an archive -- keep it as-is */
+        snprintf(canon, sizeof(canon), "%s", path);
+    }
+
+#ifdef ARCHIVE_SUPPORT
+    /* check if canonical path starts with an archive marker */
+    const char* marker = strstr(canon, "archive://");
+    if (marker == canon) {
+        /* virtual path inside an archive: parse archive_path:virtual_path */
+        const char* inner = canon + 10; /* skip "archive://" */
+        const char* colon = strchr(inner, ':');
+        if (colon) {
+            size_t alen = (size_t)(colon - inner);
+            char apath[PATH_MAX];
+            if (alen >= sizeof(apath))
+                alen = sizeof(apath) - 1;
+            memcpy(apath, inner, alen);
+            apath[alen] = '\0';
+            const char* vpath = colon + 1;
+
+            liz_fs_entry* entries = NULL;
+            size_t count = 0;
+            if (liz_archive_read(apath, vpath, &entries, &count) != 0)
+                return;
+
+            liz_fs_entries_free(app->entries, app->entry_count);
+            app->entries = entries;
+            app->entry_count = count;
+
+            free(app->sel);
+            app->sel = (bool*)calloc(count > 0 ? count : 1, sizeof(bool));
+
+            snprintf(app->cwd, sizeof(app->cwd), "%s", canon);
+            app->archive.inside = true;
+            snprintf(app->archive.archive_path, sizeof(app->archive.archive_path),
+                     "%s", apath);
+            snprintf(app->archive.virtual_path, sizeof(app->archive.virtual_path),
+                     "%s", vpath);
+
+            app->selected = 0;
+            app->scroll = 0;
+            app->hover_row = -1;
+            app->nav_segments = 0;
+            app->nav_input.editing = false;
+            app->rename.active = false;
+            app->del.active = false;
+            app->anchor_row = 0;
+            app->vim.search_active = false;
+            app->vim.pending_g = false;
+            app->vim.pending_d = false;
+            app->vim.visual_active = false;
+
+            if (app->win)
+                XStoreName(app->win->display, app->win->window, canon);
+            return;
+        }
+    }
+#endif
+
+#ifdef ARCHIVE_SUPPORT
+    /* navigating away from an archive clears the archive state, but only
+     * after the new directory is successfully read so we don't break the
+     * display if liz_fs_read fails (e.g. path is a file, not a dir) */
+    bool was_archive = app->archive.inside;
+#endif
 
     liz_fs_entry* entries = NULL;
     size_t count = 0;
     if (liz_fs_read(canon, app->show_hidden, &entries, &count) != 0)
         return;
+
+#ifdef ARCHIVE_SUPPORT
+    if (was_archive) {
+        app->archive.inside = false;
+        app->archive.archive_path[0] = '\0';
+        app->archive.virtual_path[0] = '\0';
+    }
+#endif
 
     liz_app_apply_chooser_filter(app, canon, entries, &count);
 
@@ -253,6 +329,92 @@ void liz_app_open_row(liz_app* app, int row)
     }
 
     liz_fs_entry* e = &app->entries[row];
+
+#ifdef ARCHIVE_SUPPORT
+    /* inside an archive: virtual entries */
+    if (app->archive.inside) {
+        if (e->type == LIZ_FS_VIRTUAL || e->type == LIZ_FS_DIR) {
+            if (strcmp(e->name, "..") == 0) {
+                if (app->archive.virtual_path[0] == '\0') {
+                    /* at archive root: exit to filesystem parent */
+                    char parent[PATH_MAX];
+                    if (liz_fs_parent(parent, sizeof(parent),
+                                      app->archive.archive_path) == 0)
+                        liz_app_navigate(app, parent);
+                    return;
+                }
+                /* go up: navigate to the parent virtual path */
+                char vpath[LIZ_ARCHIVE_PATH_MAX];
+                snprintf(vpath, sizeof(vpath), "%s", app->archive.virtual_path);
+                /* strip the last component */
+                char* sl = strrchr(vpath, '/');
+                if (sl && sl != vpath) {
+                    *sl = '\0';
+                } else {
+                    vpath[0] = '\0';
+                }
+                char nav[LIZ_ARCHIVE_PATH_MAX + PATH_MAX + 32];
+                snprintf(nav, sizeof(nav), "archive://%s:%s",
+                         app->archive.archive_path, vpath);
+                liz_app_navigate(app, nav);
+                return;
+            }
+            /* navigate into this virtual directory */
+            char new_vpath[LIZ_ARCHIVE_PATH_MAX + LIZ_FS_NAME_MAX + 2];
+            if (app->archive.virtual_path[0] != '\0')
+                snprintf(new_vpath, sizeof(new_vpath), "%s/%s",
+                         app->archive.virtual_path, e->name);
+            else
+                snprintf(new_vpath, sizeof(new_vpath), "%s", e->name);
+            char nav[LIZ_ARCHIVE_PATH_MAX + PATH_MAX + 32];
+            snprintf(nav, sizeof(nav), "archive://%s:%s",
+                     app->archive.archive_path, new_vpath);
+            liz_app_navigate(app, nav);
+            return;
+        }
+        if (e->type == LIZ_FS_FILE || e->type == LIZ_FS_LINK) {
+            /* extract the file to /tmp and open it */
+            char tmppath[PATH_MAX];
+            const char* basename = strrchr(e->name, '/');
+            basename = basename ? basename + 1 : e->name;
+            snprintf(tmppath, sizeof(tmppath), "/tmp/lizaveta-XXXXXX-%s", basename);
+            int fd = mkstemp(tmppath);
+            if (fd >= 0) {
+                close(fd);
+                unlink(tmppath);
+            }
+            char entry_full[LIZ_ARCHIVE_PATH_MAX + LIZ_FS_NAME_MAX + 2];
+            if (app->archive.virtual_path[0] != '\0')
+                snprintf(entry_full, sizeof(entry_full), "%s/%s",
+                         app->archive.virtual_path, e->name);
+            else
+                snprintf(entry_full, sizeof(entry_full), "%s", e->name);
+            if (liz_archive_extract(app->archive.archive_path, entry_full,
+                                    "/tmp") == 0) {
+                /* mkstemp created the file, but extract might have created
+                 * a different name; find the extracted file */
+                char extracted[PATH_MAX];
+                snprintf(extracted, sizeof(extracted), "/tmp/%s", basename);
+                liz_app_open_file(app, extracted);
+            }
+            return;
+        }
+    }
+
+    /* not inside an archive: check if this is an archive file to open */
+    if (!app->archive.inside
+        && (e->type == LIZ_FS_FILE || e->type == LIZ_FS_LINK)
+        && liz_archive_is(e->name)) {
+        char path[PATH_MAX];
+        if (liz_fs_join(path, sizeof(path), app->cwd, e->name) != 0)
+            return;
+        /* open the archive as a virtual directory */
+        char nav[LIZ_ARCHIVE_PATH_MAX + PATH_MAX + 32];
+        snprintf(nav, sizeof(nav), "archive://%s:", path);
+        liz_app_navigate(app, nav);
+        return;
+    }
+#endif
 
     char path[PATH_MAX];
     if (liz_fs_join(path, sizeof(path), app->cwd, e->name) != 0)
@@ -389,6 +551,69 @@ void liz_app_open_new_window(liz_app* app, const char* path)
     _exit(127);
 }
 
+#ifdef ARCHIVE_SUPPORT
+/* Stores the path of a pending "Extract to" chooser temp file.
+ * liz_app_poll_extract checks if the chooser has finished. */
+static char g_extract_temp[PATH_MAX];
+char g_extract_archive[PATH_MAX];
+
+void liz_app_poll_extract(liz_app* app)
+{
+    if (g_extract_temp[0] == '\0')
+        return;
+    struct stat st;
+    if (stat(g_extract_temp, &st) != 0 || st.st_size == 0)
+        return;
+
+    FILE* f = fopen(g_extract_temp, "r");
+    char dest[PATH_MAX];
+    dest[0] = '\0';
+    if (f) {
+        if (fgets(dest, sizeof(dest), f))
+            fclose(f);
+        else
+            fclose(f);
+    }
+    dest[strcspn(dest, "\r\n")] = '\0';
+
+    unlink(g_extract_temp);
+    g_extract_temp[0] = '\0';
+
+    if (dest[0] != '\0' && g_extract_archive[0] != '\0')
+        liz_archive_extract_all(g_extract_archive, dest);
+    g_extract_archive[0] = '\0';
+
+    liz_app_navigate(app, app->cwd);
+}
+
+void liz_app_open_new_chooser(liz_app* app, const char* start_dir)
+{
+    (void)app;
+    char exe[PATH_MAX];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0)
+        return;
+    exe[n] = '\0';
+
+    snprintf(g_extract_temp, sizeof(g_extract_temp),
+             "/tmp/lizaveta-extract-XXXXXX");
+    int fd = mkstemp(g_extract_temp);
+    if (fd < 0) {
+        g_extract_temp[0] = '\0';
+        return;
+    }
+    close(fd);
+
+    if (!liz_app_detach()) {
+        return;
+    }
+    /* in the detached child, run the filechooser */
+    execl(exe, exe, "--filechooser", "--directory", "--out", g_extract_temp,
+          start_dir ? start_dir : "/", (char*)NULL);
+    _exit(127);
+}
+#endif
+
 /* Safely unmounts a device: udisksctl when the block device is known
  * (this is what makes it "safe" -- it syncs and tells the device it may be
  * removed), with a plain umount of the mount point as a fallback. */
@@ -425,6 +650,31 @@ void liz_app_unmount_device(liz_app* app, const char* dev, const char* mountpoin
 
 void liz_app_go_parent(liz_app* app)
 {
+#ifdef ARCHIVE_SUPPORT
+    if (app->archive.inside) {
+        if (app->archive.virtual_path[0] == '\0') {
+            /* at archive root: exit to filesystem parent */
+            char parent[PATH_MAX];
+            if (liz_fs_parent(parent, sizeof(parent),
+                              app->archive.archive_path) == 0)
+                liz_app_navigate(app, parent);
+            return;
+        }
+        char vpath[LIZ_ARCHIVE_PATH_MAX];
+        snprintf(vpath, sizeof(vpath), "%s", app->archive.virtual_path);
+        char* sl = strrchr(vpath, '/');
+        if (sl && sl != vpath) {
+            *sl = '\0';
+        } else {
+            vpath[0] = '\0';
+        }
+        char nav[LIZ_ARCHIVE_PATH_MAX + PATH_MAX + 32];
+        snprintf(nav, sizeof(nav), "archive://%s:%s",
+                 app->archive.archive_path, vpath);
+        liz_app_navigate(app, nav);
+        return;
+    }
+#endif
     char parent[PATH_MAX];
     if (liz_fs_parent(parent, sizeof(parent), app->cwd) == 0)
         liz_app_navigate(app, parent);
@@ -520,6 +770,18 @@ static void liz_app_clip_clear(liz_app* app)
         free(app->fileclip.paths);
     }
     app->fileclip.paths = NULL;
+#ifdef ARCHIVE_SUPPORT
+    if (app->fileclip.is_virtual) {
+        free(app->fileclip.is_virtual);
+        app->fileclip.is_virtual = NULL;
+    }
+    if (app->fileclip.archive_paths) {
+        for (int i = 0; i < app->fileclip.count; i++)
+            free(app->fileclip.archive_paths[i]);
+        free(app->fileclip.archive_paths);
+        app->fileclip.archive_paths = NULL;
+    }
+#endif
     app->fileclip.count = 0;
 }
 
@@ -536,16 +798,36 @@ static void liz_app_clip_set(liz_app* app, bool cut)
     if (!paths)
         return;
     int count = 0;
+#ifdef ARCHIVE_SUPPORT
+    bool* is_virtual = NULL;
+    char** archive_paths = NULL;
+    bool has_virtual = app->archive.inside;
+    if (has_virtual) {
+        is_virtual = (bool*)calloc((size_t)n, sizeof(bool));
+        archive_paths = (char**)calloc((size_t)n, sizeof(char*));
+    }
+#endif
     for (int i = 0; i < n; i++) {
         char path[PATH_MAX];
         if (liz_fs_join(path, sizeof(path), app->cwd, app->entries[rows[i]].name) != 0)
             continue;
         paths[count] = strdup(path);
-        if (paths[count])
-            count++;
+        if (!paths[count])
+            continue;
+#ifdef ARCHIVE_SUPPORT
+        if (has_virtual && is_virtual && archive_paths) {
+            is_virtual[count] = true;
+            archive_paths[count] = strdup(app->archive.archive_path);
+        }
+#endif
+        count++;
     }
     if (count == 0) {
         free(paths);
+#ifdef ARCHIVE_SUPPORT
+        free(is_virtual);
+        free(archive_paths);
+#endif
         return;
     }
 
@@ -553,6 +835,10 @@ static void liz_app_clip_set(liz_app* app, bool cut)
     app->fileclip.paths = paths;
     app->fileclip.count = count;
     app->fileclip.cut = cut;
+#ifdef ARCHIVE_SUPPORT
+    app->fileclip.is_virtual = is_virtual;
+    app->fileclip.archive_paths = archive_paths;
+#endif
 }
 
 void liz_app_copy_selection(liz_app* app)
@@ -589,9 +875,33 @@ void liz_app_paste(liz_app* app)
             continue;
         }
 
+#ifdef ARCHIVE_SUPPORT
+        if (app->fileclip.is_virtual && app->fileclip.is_virtual[i]
+            && app->fileclip.archive_paths && app->fileclip.archive_paths[i]) {
+            /* extract from archive to the current directory */
+            const char* archive_path = app->fileclip.archive_paths[i];
+            /* src is like "archive:///path/to/archive.zip:dir/file.txt" */
+            const char* archive_marker = strstr(src, "archive://");
+            if (archive_marker) {
+                const char* inner = src + 10; /* skip "archive://" */
+                const char* colon = strchr(inner, ':');
+                if (colon) {
+                    const char* internal = colon + 1;
+                    if (liz_archive_extract(archive_path, internal,
+                                            app->cwd) != 0)
+                        ok = false;
+                } else {
+                    ok = false;
+                }
+            }
+        } else {
+#endif
         int r = app->fileclip.cut ? rename(src, dst) : liz_fs_copy_recursive(src, dst);
         if (r != 0)
             ok = false;
+#ifdef ARCHIVE_SUPPORT
+        }
+#endif
     }
 
     if (app->fileclip.cut && ok)
@@ -936,6 +1246,57 @@ static void liz_app_handle_button(liz_app* app, xc_event ev)
     /* navigation bar breadcrumbs */
     int seg = liz_nav_hit(app, ev.x, ev.y);
     if (seg >= 0) {
+#ifdef ARCHIVE_SUPPORT
+        if (app->archive.inside && strncmp(app->cwd, "archive://", 10) == 0) {
+            const char* inner = app->cwd + 10;
+            const char* colon = strchr(inner, ':');
+            if (colon) {
+                size_t alen = (size_t)(colon - inner);
+                char apath[PATH_MAX];
+                if (alen >= sizeof(apath))
+                    alen = sizeof(apath) - 1;
+                memcpy(apath, inner, alen);
+                apath[alen] = '\0';
+                const char* vpath = colon + 1;
+                size_t vplen = strlen(vpath);
+                size_t fs_end = 10 + alen;
+
+                size_t end = app->nav_sg[seg].end;
+
+                if (end == 0) {
+                    /* ".." segment at archive root: exit to filesystem parent */
+                    char parent[PATH_MAX];
+                    if (liz_fs_parent(parent, sizeof(parent), apath) == 0)
+                        liz_app_navigate(app, parent);
+                } else if (end == fs_end) {
+                    /* archive filename: navigate to the archive root */
+                    char nav[LIZ_ARCHIVE_PATH_MAX + PATH_MAX + 32];
+                    snprintf(nav, sizeof(nav), "archive://%s:", apath);
+                    liz_app_navigate(app, nav);
+                } else if (end < fs_end) {
+                    /* filesystem path segment: navigate to that path */
+                    char path[PATH_MAX];
+                    size_t raw = end - 10; /* offset into inner[] */
+                    if (raw <= alen && raw < sizeof(path)) {
+                        memcpy(path, inner, raw);
+                        path[raw] = '\0';
+                        liz_app_navigate(app, path);
+                    }
+                } else if (vplen > 0) {
+                    /* virtual path segment: navigate within the archive */
+                    size_t voff = end - fs_end - 1;
+                    if (voff <= vplen) {
+                        char nav[LIZ_ARCHIVE_PATH_MAX + PATH_MAX + 32];
+                        snprintf(nav, sizeof(nav), "archive://%.*s:%.*s",
+                                 (int)alen, apath, (int)voff, vpath);
+                        liz_app_navigate(app, nav);
+                    }
+                }
+                return;
+            }
+        }
+#endif
+
         size_t end = app->nav_sg[seg].end;
         if (end + 1 <= sizeof(app->cwd)) {
             char path[PATH_MAX];
@@ -1082,6 +1443,17 @@ static void liz_app_dnd_position(void* data, int x_root, int y_root, bool* accep
         return;
     }
 
+#ifdef ARCHIVE_SUPPORT
+    /* drops inside an archive are not supported */
+    if (app->archive.inside) {
+        *accept = false;
+        app->dnd_active = false;
+        app->dnd_row = -1;
+        liz_app_render(app);
+        return;
+    }
+#endif
+
     *accept = true;
     app->dnd_active = true;
     app->dnd_row = liz_app_dnd_row_at(app, ly);
@@ -1125,7 +1497,25 @@ static void liz_app_dnd_drop(void* data, char* const* paths, int count,
         if (liz_fs_join(dst, sizeof(dst), target, base) != 0)
             continue;
         if (access(dst, F_OK) == 0)
-            continue; /* never overwrite an existing target */
+            continue;
+
+#ifdef ARCHIVE_SUPPORT
+        if (strncmp(src, "archive://", 10) == 0) {
+            const char* inner = src + 10;
+            const char* colon = strchr(inner, ':');
+            if (colon) {
+                size_t alen = (size_t)(colon - inner);
+                char apath[PATH_MAX];
+                if (alen >= sizeof(apath))
+                    alen = sizeof(apath) - 1;
+                memcpy(apath, inner, alen);
+                apath[alen] = '\0';
+                const char* internal = colon + 1;
+                (void)liz_archive_extract(apath, internal, target);
+            }
+            continue;
+        }
+#endif
         (void)liz_fs_copy_recursive(src, dst);
     }
 
@@ -1267,6 +1657,10 @@ void liz_app_render(liz_app* app)
 {
     xwindow* w = app->win;
 
+#ifdef ARCHIVE_SUPPORT
+    liz_app_poll_extract(app);
+#endif
+
     /* keep the embedded preview pane in step with the selection */
     liz_preview_sync(app);
 
@@ -1329,6 +1723,9 @@ int liz_app_init(liz_app* app)
     liz_sidebar_init(app);
 #ifdef ICON_SUPPORT
     liz_icons_init();
+#endif
+#ifdef ARCHIVE_SUPPORT
+    memset(&app->archive, 0, sizeof(app->archive));
 #endif
 
     char cwd[PATH_MAX];

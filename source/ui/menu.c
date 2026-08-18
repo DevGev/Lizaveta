@@ -8,6 +8,10 @@
 #include "ui/rename.h"
 #include "ui/theme.h"
 
+#ifdef ARCHIVE_SUPPORT
+#include "archive/archive.h"
+#endif
+
 #define LIZ_MENU_W       180 /* the narrowest a menu gets */
 #define LIZ_MENU_W_MAX   360
 #define LIZ_MENU_PAD_X   10
@@ -80,6 +84,16 @@ void liz_menu_open(liz_app* app, int x, int y, int row)
                 liz_menu_add(m, LIZ_MENU_RENAME, "Rename");
             liz_menu_add(m, LIZ_MENU_COPY, "Copy");
             liz_menu_add(m, LIZ_MENU_CUT, "Cut");
+
+#ifdef ARCHIVE_SUPPORT
+            if (!is_dotdot
+                && (app->entries[row].type == LIZ_FS_FILE
+                    || app->entries[row].type == LIZ_FS_LINK)
+                && liz_archive_is(app->entries[row].name)) {
+                liz_menu_add(m, LIZ_MENU_EXTRACT_HERE, "Extract here");
+                liz_menu_add(m, LIZ_MENU_EXTRACT_TO, "Extract to...");
+            }
+#endif
         }
     }
 
@@ -243,6 +257,33 @@ static void liz_menu_run(liz_app* app, const liz_menu_item* item)
     }
     case LIZ_MENU_TOGGLE_SIDEBAR:
         liz_app_toggle_sidebar(app);
+        break;
+#ifdef ARCHIVE_SUPPORT
+    case LIZ_MENU_EXTRACT_HERE: {
+        int row = app->menu.row;
+        if (row >= 0 && (size_t)row < app->entry_count) {
+            char path[PATH_MAX];
+            if (liz_fs_join(path, sizeof(path), app->cwd,
+                           app->entries[row].name) == 0)
+                liz_archive_extract_all(path, app->cwd);
+            liz_app_navigate(app, app->cwd);
+        }
+        break;
+    }
+    case LIZ_MENU_EXTRACT_TO: {
+        int row = app->menu.row;
+        if (row >= 0 && (size_t)row < app->entry_count) {
+            char path[PATH_MAX];
+            if (liz_fs_join(path, sizeof(path), app->cwd,
+                           app->entries[row].name) == 0) {
+                snprintf(g_extract_archive, sizeof(g_extract_archive), "%s", path);
+                liz_app_open_new_chooser(app, app->cwd);
+            }
+        }
+        break;
+    }
+#endif
+    default:
         break;
     }
 }

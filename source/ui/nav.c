@@ -26,25 +26,79 @@ static int liz_nav_build(liz_app* app)
     size_t len = strlen(cwd);
 
     int n = 0;
+
+#ifdef ARCHIVE_SUPPORT
+    if (app->archive.inside && strncmp(cwd, "archive://", 10) == 0) {
+        const char* inner = cwd + 10;
+        const char* colon = strchr(inner, ':');
+        if (colon) {
+            size_t alen = (size_t)(colon - inner);
+            const char* vpath = colon + 1;
+            size_t vlen = strlen(vpath);
+
+            /* filesystem path segments from the archive path */
+            size_t fi = 0;
+            while (fi < alen && n < LIZ_NAV_SEGMENTS) {
+                while (fi < alen && inner[fi] == '/')
+                    fi++;
+                if (fi >= alen)
+                    break;
+                size_t fj = fi;
+                while (fj < alen && inner[fj] != '/')
+                    fj++;
+                app->nav_sg[n].text = inner + fi;
+                app->nav_sg[n].len = (int)(fj - fi);
+                app->nav_sg[n].end = 10 + fj;
+                n++;
+                fi = fj;
+            }
+
+            /* virtual path segments (inside the archive) */
+            size_t vi = 0;
+            while (vi < vlen && n < LIZ_NAV_SEGMENTS) {
+                while (vi < vlen && vpath[vi] == '/')
+                    vi++;
+                if (vi >= vlen)
+                    break;
+                size_t vj = vi;
+                while (vj < vlen && vpath[vj] != '/')
+                    vj++;
+                app->nav_sg[n].text = vpath + vi;
+                app->nav_sg[n].len = (int)(vj - vi);
+                app->nav_sg[n].end = 10 + alen + 1 + vj;
+                n++;
+                vi = vj;
+            }
+
+            goto layout;
+        }
+    }
+#endif
+
     app->nav_sg[n].text = cwd;
     app->nav_sg[n].len = 1;
     app->nav_sg[n].end = 1;
     n++;
 
-    size_t i = 1;
-    while (i < len && n < LIZ_NAV_SEGMENTS) {
-        size_t j = i;
-        while (j < len && cwd[j] != '/')
-            j++;
-        app->nav_sg[n].text = cwd + i;
-        app->nav_sg[n].len = (int)(j - i);
-        app->nav_sg[n].end = j;
-        n++;
-        i = j;
-        while (i < len && cwd[i] == '/')
-            i++;
+    {
+        size_t i = 1;
+        while (i < len && n < LIZ_NAV_SEGMENTS) {
+            size_t j = i;
+            while (j < len && cwd[j] != '/')
+                j++;
+            app->nav_sg[n].text = cwd + i;
+            app->nav_sg[n].len = (int)(j - i);
+            app->nav_sg[n].end = j;
+            n++;
+            i = j;
+            while (i < len && cwd[i] == '/')
+                i++;
+        }
     }
 
+#ifdef ARCHIVE_SUPPORT
+layout:;
+#endif
     int x = LIZ_UI_PAD;
     int placed = 0;
     for (int k = 0; k < n; k++) {
@@ -60,8 +114,6 @@ static int liz_nav_build(liz_app* app)
         placed++;
     }
 
-    /* segments past the edge never got coordinates, so they are dropped
-     * rather than drawn and hit-tested at stale positions */
     app->nav_segments = placed;
     return placed;
 }

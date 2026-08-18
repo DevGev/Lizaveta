@@ -105,6 +105,8 @@ typedef struct {
     char** paths;
     int count;
     bool cut;
+    bool* is_virtual;      /* NULL when all entries are real files */
+    char** archive_paths;  /* NULL when all entries are real files */
 } liz_fileclip;
 
 /* In-progress "create folder" prompt (right-click menu): the status bar
@@ -122,8 +124,8 @@ typedef struct {
  * instead carry the sidebar entry they were opened on. */
 typedef enum {
     LIZ_MENU_OPEN,
-    LIZ_MENU_OPEN_WITH,     /* replaces the menu with the application list */
-    LIZ_MENU_OPEN_WITH_APP, /* item.data indexes liz_context_menu.apps */
+    LIZ_MENU_OPEN_WITH,
+    LIZ_MENU_OPEN_WITH_APP,
     LIZ_MENU_RENAME,
     LIZ_MENU_COPY,
     LIZ_MENU_CUT,
@@ -132,6 +134,8 @@ typedef enum {
     LIZ_MENU_UNMOUNT,
     LIZ_MENU_OPEN_NEW_WINDOW,
     LIZ_MENU_TOGGLE_SIDEBAR,
+    LIZ_MENU_EXTRACT_HERE,
+    LIZ_MENU_EXTRACT_TO,
 } liz_menu_action;
 
 typedef enum {
@@ -174,6 +178,16 @@ typedef struct {
 } liz_jump_entry;
 
 #define LIZ_JUMPLIST_MAX 32
+
+#ifdef ARCHIVE_SUPPORT
+#define LIZ_ARCHIVE_PATH_MAX 4096
+
+typedef struct {
+    bool inside;
+    char archive_path[PATH_MAX];
+    char virtual_path[LIZ_ARCHIVE_PATH_MAX];
+} liz_archive_state;
+#endif
 
 /* File-picker mode (`lizaveta --filechooser`): instead of a general file
  * manager the app confirms a choice (Enter/l/q) or cancels (Esc), writes the
@@ -314,6 +328,10 @@ typedef struct liz_app {
 
     liz_vim_state vim;
 
+#ifdef ARCHIVE_SUPPORT
+    liz_archive_state archive;
+#endif
+
     bool quit;
 } liz_app;
 
@@ -410,5 +428,13 @@ void liz_app_paste(liz_app* app);
 
 /* Helper shared by the app loop and widgets. */
 double liz_app_now(void);
+
+/* Spawns a new lizaveta instance in filechooser directory mode at
+ * `start_dir`, for choosing an extraction target. */
+void liz_app_open_new_chooser(liz_app* app, const char* start_dir);
+
+#ifdef ARCHIVE_SUPPORT
+extern char g_extract_archive[PATH_MAX];
+#endif
 
 #endif /* LIZ_APP_H */

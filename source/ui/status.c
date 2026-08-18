@@ -129,7 +129,8 @@ void liz_status_draw(liz_app* app)
 
         char right[512];
         int rightlen;
-        if (e->type == LIZ_FS_DIR || e->type == LIZ_FS_LINK) {
+        if (e->type == LIZ_FS_DIR || e->type == LIZ_FS_LINK
+            || e->type == LIZ_FS_VIRTUAL) {
             rightlen = snprintf(right, sizeof(right), "%s", e->name);
         } else {
             char sizebuf[16];

@@ -81,6 +81,9 @@ static void liz_list_draw_marker(xwindow* w, liz_fs_type type, int x, int cy)
     case LIZ_FS_DIR:
         xc_rect(w, x, cy - 4, 8, 8, liz_theme_dir);
         break;
+    case LIZ_FS_VIRTUAL:
+        xc_rect(w, x, cy - 4, 8, 8, liz_theme_dir);
+        break;
     case LIZ_FS_LINK:
         xc_rect(w, x + 1, cy - 3, 6, 6, liz_theme_accent);
         break;
@@ -204,7 +207,8 @@ void liz_list_draw(liz_app* app)
         }
 
         xc_font* f = app->font;
-        if (e->type == LIZ_FS_DIR || e->type == LIZ_FS_LINK)
+        if (e->type == LIZ_FS_DIR || e->type == LIZ_FS_LINK
+            || e->type == LIZ_FS_VIRTUAL)
             f = app->font_accent;
         else if (e->hidden)
             f = app->font_dim;
@@ -221,7 +225,8 @@ void liz_list_draw(liz_app* app)
         /* symbolic icons are drawn in the inherited text color, so they
          * follow whatever color this row's label uses */
         xc_color tint = liz_theme_text;
-        if (e->type == LIZ_FS_DIR || e->type == LIZ_FS_LINK)
+        if (e->type == LIZ_FS_DIR || e->type == LIZ_FS_LINK
+            || e->type == LIZ_FS_VIRTUAL)
             tint = liz_theme_dir;
         else if (e->hidden)
             tint = liz_theme_text_dim;

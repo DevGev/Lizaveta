@@ -14,8 +14,18 @@ option("icons")
     set_description("Enable icon support (requires NanoSVG)")
 option_end()
 
+option("archives")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Enable archive browsing support (requires libarchive)")
+option_end()
+
 if has_config("icons") then
     add_requires("nanosvg")
+end
+
+if has_config("archives") then
+    add_requires("libarchive")
 end
 
 local function default_prefix()
@@ -36,10 +46,16 @@ target("lizaveta")
     add_files("source/ui/*.c")
     add_files("source/dbus/*.c")
     add_files("source/icons/*.c")
+    add_files("source/archive/*.c")
 
     if has_config("icons") then
         add_packages("nanosvg")
         add_defines("ICON_SUPPORT")
+    end
+
+    if has_config("archives") then
+        add_packages("libarchive")
+        add_defines("ARCHIVE_SUPPORT")
     end
 
     set_warnings("all", "extra")
