@@ -3,7 +3,12 @@
 #include "ui/vim.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <string.h>
+#include <unistd.h>
+
+#include <fcntl.h>
+#include <sys/wait.h>
 
 #include "app/app.h"
 #include "ui/delete.h"
@@ -118,6 +123,9 @@ static void liz_vim_enter_ex(liz_app* app)
     app->vim.cmdline_len = 0;
 }
 
+/* Parses `cmd` as an ex-command. Handles :noh, :q, and :o <program> [args].
+ * For :o, the program is exec'd with the file at the cursor. If the arguments
+ * contain %s it is replaced with the file path; otherwise the path is appended. */
 static void liz_vim_run_ex(liz_app* app, const char* cmd)
 {
     if (strcmp(cmd, "noh") == 0 || strcmp(cmd, "nohlsearch") == 0) {
@@ -125,6 +133,79 @@ static void liz_vim_run_ex(liz_app* app, const char* cmd)
     } else if (strcmp(cmd, "q") == 0 || strcmp(cmd, "quit") == 0) {
         app->quit = true;
         app->win->running = false;
+    } else if (strncmp(cmd, "o ", 2) == 0 || strcmp(cmd, "o") == 0) {
+        /* :o <program> [args...] — open the file at cursor with <program> */
+        if (app->selected < 0 || (size_t)app->selected >= app->entry_count)
+            return;
+        if (app->entries[app->selected].type == LIZ_FS_DIR)
+            return;
+
+        const char* rest = cmd + 1;
+        while (*rest == ' ')
+            rest++;
+        if (*rest == '\0')
+            return;
+
+        char filepath[PATH_MAX];
+        if (liz_fs_join(filepath, sizeof(filepath), app->cwd,
+                        app->entries[app->selected].name) != 0)
+            return;
+
+        /* Split the rest into program + optional arguments, tokenising on
+         * spaces.  We build an argv[] array on the stack; %s in any token
+         * is replaced by the file path. */
+        const char* argv[128];
+        int argc = 0;
+        char buf[LIZ_VIM_CMDLINE_MAX];
+        snprintf(buf, sizeof(buf), "%s", rest);
+
+        char* save = NULL;
+        char* tok = strtok_r(buf, " ", &save);
+        while (tok && argc < (int)(sizeof(argv) / sizeof(argv[0])) - 1) {
+            argv[argc++] = tok;
+            tok = strtok_r(NULL, " ", &save);
+        }
+        argv[argc] = NULL;
+
+        if (argc == 0)
+            return;
+
+        pid_t pid = fork();
+        if (pid < 0)
+            return;
+        if (pid > 0)
+            return; /* parent returns immediately */
+
+        /* child */
+        setsid();
+
+        /* Build the final argv, replacing %s tokens with the file path. */
+        const char* final_argv[128];
+        int final_argc = 0;
+        for (int i = 0; i < argc && final_argc < (int)(sizeof(final_argv) / sizeof(final_argv[0])) - 1; i++) {
+            if (strcmp(argv[i], "%s") == 0) {
+                final_argv[final_argc++] = filepath;
+            } else {
+                final_argv[final_argc++] = argv[i];
+            }
+        }
+        final_argv[final_argc] = NULL;
+
+        /* If no %s was found, append the file path. */
+        bool had_percent_s = false;
+        for (int i = 0; i < argc; i++) {
+            if (strcmp(argv[i], "%s") == 0) {
+                had_percent_s = true;
+                break;
+            }
+        }
+        if (!had_percent_s && final_argc < (int)(sizeof(final_argv) / sizeof(final_argv[0])) - 1) {
+            final_argv[final_argc++] = filepath;
+            final_argv[final_argc] = NULL;
+        }
+
+        execvp(final_argv[0], (char* const*)final_argv);
+        _exit(127);
     }
     /* unknown commands are ignored, same as vim's "E492" case would be
      * for a modal file manager: no-op rather than an error dialog */
