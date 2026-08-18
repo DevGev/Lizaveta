@@ -1307,11 +1307,11 @@ int liz_app_init(liz_app* app)
     win->on_dnd_position = liz_app_dnd_position;
     win->on_dnd_leave = liz_app_dnd_leave;
     win->on_dnd_drop = liz_app_dnd_drop;
-    app->font = xc_font_load(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, liz_theme_text);
-    app->font_bold = xc_font_load_style(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, "bold", liz_theme_text);
-    app->font_dim = xc_font_load(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, liz_theme_text_dim);
-    app->font_accent = xc_font_load(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, liz_theme_dir);
-    app->font_error = xc_font_load(win, LIZ_UI_FONT, LIZ_UI_FONT_PX, liz_theme_error);
+    app->font = xc_font_load(win, LIZ_FONT, LIZ_FONT_SIZE, liz_theme_text);
+    app->font_bold = xc_font_load_style(win, LIZ_FONT, LIZ_FONT_SIZE, "bold", liz_theme_text);
+    app->font_dim = xc_font_load(win, LIZ_FONT, LIZ_FONT_SIZE, liz_theme_text_dim);
+    app->font_accent = xc_font_load(win, LIZ_FONT, LIZ_FONT_SIZE, liz_theme_dir);
+    app->font_error = xc_font_load(win, LIZ_FONT, LIZ_FONT_SIZE, liz_theme_error);
 
     if (!app->font || !app->font_bold || !app->font_dim || !app->font_accent
         || !app->font_error) {
