@@ -8,6 +8,9 @@
 #include "ui/rename.h"
 #include "ui/theme.h"
 
+/* How long a mount error stays visible in the status bar. */
+#define LIZ_MOUNT_ERROR_SECS 8.0
+
 void liz_status_draw(liz_app* app)
 {
     xwindow* w = app->win;
@@ -122,6 +125,16 @@ void liz_status_draw(liz_app* app)
                                 "   [%d %s]", app->fileclip.count,
                                 app->fileclip.cut ? "cut" : "copied");
         xc_text(w, LIZ_UI_PAD, text_y, left, leftlen, app->font_dim);
+    }
+
+    if (app->mount_error[0] != '\0'
+        && liz_app_now() - app->mount_error_time < LIZ_MOUNT_ERROR_SECS) {
+        int errlen = (int)strlen(app->mount_error);
+        int ew = 0;
+        xc_text_measure(w, app->mount_error, errlen, app->font_error, &ew, NULL);
+        xc_text(w, w->width - LIZ_UI_PAD - ew, text_y, app->mount_error, errlen,
+                app->font_error);
+        return;
     }
 
     if (app->selected >= 0 && (size_t)app->selected < app->entry_count) {

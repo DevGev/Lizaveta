@@ -307,6 +307,11 @@ typedef struct liz_app {
 
     liz_chooser chooser; /* active only in --filechooser mode */
 
+    /* message from the most recent device mount attempt, shown in the
+     * status bar; cleared when a fresh mount starts */
+    char mount_error[512];
+    double mount_error_time;
+
     int mouse_x;
     int mouse_y;
 

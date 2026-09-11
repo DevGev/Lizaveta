@@ -665,6 +665,75 @@ void liz_app_unmount_uri(liz_app* app, const char* uri)
 /* Where liz_app_mount_device stashes its result for liz_app_poll_mount to
  * pick up once the detached mount process has finished. */
 static char g_mount_temp[PATH_MAX];
+static double g_mount_started_at; /* when a mount was last launched */
+
+/* How long a mount may take before the poll loop gives up on it. MTP
+ * negotiation with a phone is not instant, so this has to be generous. */
+#define LIZ_MOUNT_TIMEOUT_SECS 15.0
+
+/* The detached child appends this line after its mount tool exits, so the
+ * render loop can tell "streaming output" from "tool finished". */
+#define LIZ_MOUNT_DONE_MARKER "___LIZAVETA_MOUNT_DONE___"
+
+/* Records `msg` as the current mount status to show in the status bar. A
+ * trailing newline is trimmed; only the first line is kept. */
+static void liz_app_set_mount_error(liz_app* app, const char* msg)
+{
+    app->mount_error[0] = '\0';
+    if (msg && msg[0]) {
+        const char* nl = strchr(msg, '\n');
+        size_t len = nl ? (size_t)(nl - msg) : strlen(msg);
+        while (len > 0 && (msg[len - 1] == '\n' || msg[len - 1] == '\r'))
+            len--;
+        if (len >= sizeof(app->mount_error))
+            len = sizeof(app->mount_error) - 1;
+        memcpy(app->mount_error, msg, len);
+        app->mount_error[len] = '\0';
+        app->mount_error_time = liz_app_now();
+    } else {
+        app->mount_error_time = 0;
+    }
+}
+
+/* Runs `argv` (executable + arguments, NULL-terminated) in a child of the
+ * already-detached mount process, with the tool's stdout+stderr appended to
+ * `out` (the result file), and returns its exit status (127 when the tool
+ * itself is missing). */
+static int liz_mount_run_cmd(int out, char* const* argv, const char* tool)
+{
+    pid_t c = fork();
+    if (c == 0) {
+        if (out >= 0) {
+            dup2(out, STDOUT_FILENO);
+            dup2(out, STDERR_FILENO);
+        }
+        execvp(argv[0], argv);
+        fprintf(stderr, "lizaveta: %s not found\n", tool);
+        _exit(127);
+    }
+    int status = 1;
+    while (waitpid(c, &status, 0) < 0) { }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
+}
+
+/* True when the last mount command's captured output reports the gvfs
+ * "shadow mount" staleness: gio prints "Location is already mounted" for a
+ * device that has no actual FUSE mount. This is the one case worth clearing
+ * -- tearing an MTP session down for any other kind of failure just makes a
+ * finicky phone re-enumerate. */
+static bool liz_mount_says_already(void)
+{
+    int fd = open(g_mount_temp, O_RDONLY);
+    if (fd < 0)
+        return false;
+    char buf[4096];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n < 0)
+        return false;
+    buf[n] = '\0';
+    return strstr(buf, "already mounted") != NULL;
+}
 
 /* Mounts a sidebar device entry: block devices through udisksctl (which
  * also asks udisks for the chosen mount point), GVFS devices such as MTP
@@ -673,12 +742,13 @@ static char g_mount_temp[PATH_MAX];
  * file manager can navigate there once the mount completes. */
 void liz_app_mount_device(liz_app* app, const liz_sidebar_entry* e)
 {
-    (void)app;
     if (!e)
         return;
     bool block = e->dev[0] != '\0';
     if (!block && e->uri[0] == '\0')
         return;
+
+    liz_app_set_mount_error(app, NULL);
 
     snprintf(g_mount_temp, sizeof(g_mount_temp), "/tmp/lizaveta-mount-XXXXXX");
     int fd = mkstemp(g_mount_temp);
@@ -691,75 +761,127 @@ void liz_app_mount_device(liz_app* app, const liz_sidebar_entry* e)
     dprintf(fd, "%s\n", block ? "" : e->path);
     close(fd);
 
+    g_mount_started_at = liz_app_now();
+
     if (!liz_app_detach())
         return;
 
-    /* detach() pointed stdout at /dev/null; append it to the result file
-     * so poll_mount can read both the hint and the tool's output */
+    /* detach() pointed stdio at /dev/null; open the result file so each
+     * tool child's output -- and the final completion marker -- lands there. */
     int out = open(g_mount_temp, O_WRONLY | O_APPEND);
+
+    /* run the tool(s) as children so the grandchild can report when they
+     * have actually finished -- polling the file alone races the mount,
+     * which for MTP takes seconds to negotiate with the device */
+    if (block) {
+        char* const mount_argv[] = { "udisksctl", "mount", "-b", (char*)e->dev, NULL };
+        liz_mount_run_cmd(out, mount_argv, "udisksctl");
+    } else {
+        char* const mount_argv[] = { "gio", "mount", (char*)e->uri, NULL };
+        if (liz_mount_run_cmd(out, mount_argv, "gio") != 0) {
+            /* a phone that has since locked its screen makes gvfs keep a
+             * stale "shadow mount": gio reports the device as already
+             * mounted even though no FUSE mount exists. Clear it and retry
+             * once. Any other failure is left alone -- tearing the MTP
+             * session down makes a phone that is already negotiating its
+             * USB mode re-enumerate into "charging". */
+            if (liz_mount_says_already()) {
+                char* const unmount_argv[] = { "gio", "mount", "-u", (char*)e->uri, NULL };
+                liz_mount_run_cmd(out, unmount_argv, "gio");
+                liz_mount_run_cmd(out, mount_argv, "gio");
+            }
+        }
+    }
     if (out >= 0) {
-        dup2(out, STDOUT_FILENO);
-        dup2(out, STDERR_FILENO);
+        dprintf(out, "\n%s\n", LIZ_MOUNT_DONE_MARKER);
         close(out);
     }
-
-    if (block)
-        execlp("udisksctl", "udisksctl", "mount", "-b", e->dev, (char*)NULL);
-    execlp("gio", "gio", "mount", e->uri, (char*)NULL);
-    _exit(127);
+    _exit(0);
 }
 
 /* Navigates to the location a finished liz_app_mount_device reported:
  * either the GVFS path recorded up front or the "Mounted <dev> at <path>"
- * mount point from udisksctl's output. Failures leave nothing to parse and
- * simply clean up. */
+ * mount point from udisksctl's output. The temp file is only trusted once
+ * the detached child has appended its completion marker; a failed or timed
+ * out mount surfaces the tool's error instead of failing silently. */
 static void liz_app_poll_mount(liz_app* app)
 {
     if (g_mount_temp[0] == '\0')
         return;
     struct stat st;
     if (stat(g_mount_temp, &st) != 0 || st.st_size == 0)
-        return;
+        return; /* mount still starting up */
 
-    FILE* f = fopen(g_mount_temp, "r");
-    char dest[PATH_MAX];
-    dest[0] = '\0';
-    if (f) {
-        char hint[PATH_MAX];
-        if (fgets(hint, sizeof(hint), f)) {
-            hint[strcspn(hint, "\r\n")] = '\0';
-            if (hint[0] != '\0')
-                snprintf(dest, sizeof(dest), "%s", hint);
-        }
-        if (dest[0] == '\0') {
-            char* buf = malloc((size_t)st.st_size + 1);
-            if (buf) {
-                size_t got = fread(buf, 1, (size_t)st.st_size, f);
-                buf[got] = '\0';
-                /* udisksctl prints "Mounted <dev> at <path>."; only the
-                 * sentence-final dot is stripped, never dots inside the
-                 * mount point itself */
-                char* at = strstr(buf, " at ");
-                if (at) {
-                    at += 4;
-                    at[strcspn(at, "\r\n")] = '\0';
-                    size_t len = strlen(at);
-                    if (len > 0 && at[len - 1] == '.')
-                        at[len - 1] = '\0';
-                    snprintf(dest, sizeof(dest), "%s", at);
-                }
-                free(buf);
-            }
-        }
-        fclose(f);
+    char* buf = malloc((size_t)st.st_size + 1);
+    if (!buf)
+        return;
+    FILE* f = fopen(g_mount_temp, "rb");
+    if (!f) {
+        free(buf);
+        return;
     }
+    size_t got = fread(buf, 1, (size_t)st.st_size, f);
+    fclose(f);
+    buf[got] = '\0';
+
+    /* not finished yet: the child is still running the tool */
+    char* done = strstr(buf, LIZ_MOUNT_DONE_MARKER);
+    if (!done) {
+        if (liz_app_now() - g_mount_started_at > LIZ_MOUNT_TIMEOUT_SECS) {
+            liz_app_set_mount_error(app, "mount did not finish in time");
+            unlink(g_mount_temp);
+            g_mount_temp[0] = '\0';
+        }
+        free(buf);
+        return;
+    }
+    *done = '\0';
+
+    /* line 1 is the hint, the rest is the tool's stdout/stderr */
+    char* nl = strchr(buf, '\n');
+    if (nl)
+        *nl = '\0';
+    const char* hint = buf;
+    const char* output = nl ? nl + 1 : "";
 
     unlink(g_mount_temp);
     g_mount_temp[0] = '\0';
 
+    /* block devices carry no hint -- the location comes from udisksctl's
+     * "Mounted <dev> at <path>." line; only the sentence-final dot is
+     * stripped, never dots inside the mount point itself */
+    char dest[PATH_MAX];
+    if (hint[0] != '\0') {
+        snprintf(dest, sizeof(dest), "%s", hint);
+    } else {
+        dest[0] = '\0';
+        const char* at = strstr(output, " at ");
+        if (at) {
+            at += 4;
+            size_t len = strcspn(at, "\r\n");
+            char* trimmed = (char*)at;
+            trimmed[len] = '\0';
+            if (len > 0 && trimmed[len - 1] == '.')
+                trimmed[len - 1] = '\0';
+            snprintf(dest, sizeof(dest), "%s", trimmed);
+        }
+    }
+
     struct stat dst;
-    if (dest[0] != '\0' && stat(dest, &dst) == 0 && S_ISDIR(dst.st_mode))
+    if (dest[0] != '\0' && stat(dest, &dst) == 0 && S_ISDIR(dst.st_mode)) {
         liz_app_navigate(app, dest);
+    } else {
+        /* the mount point never appeared: surface whatever the tool said */
+        const char* err = output;
+        while (*err == '\n' || *err == '\r')
+            err++;
+        const char* shown = err[0] ? err
+            : "Mount reported success but the mount point never appeared "
+              "(stale gvfs session bus?)";
+        liz_app_set_mount_error(app, shown);
+    }
+
+    free(buf);
 }
 
 void liz_app_go_parent(liz_app* app)
