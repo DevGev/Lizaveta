@@ -1,6 +1,6 @@
-/* apps.c - which installed application opens a file, and running it. */
+/* defaults.c - which installed application opens a file, and running it. */
 
-#include "apps/apps.h"
+#include "defaults/defaults.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -13,10 +13,10 @@
 #include "icons/mime.h"
 #include "icons/xdg.h"
 
-#define LIZ_APPS_ASSOC_MAX 4096 /* longest desktop-id list read from one key */
-#define LIZ_APPS_TYPES_MAX 32   /* candidate types, aliases included */
+#define LIZ_DEFAULTS_ASSOC_MAX 4096 /* longest desktop-id list read from one key */
+#define LIZ_DEFAULTS_TYPES_MAX 32   /* candidate types, aliases included */
 
-static char* liz_apps_slurp(const char* path)
+static char* liz_defaults_slurp(const char* path)
 {
     FILE* f = fopen(path, "rb");
     if (!f)
@@ -47,7 +47,7 @@ static char* liz_apps_slurp(const char* path)
  * "kde4-konsole.desktop" can live at "kde4/konsole.desktop"; both spellings
  * are tried. Entries marked Hidden are treated as absent, which is how the
  * spec says to retract an association. */
-static bool liz_apps_load(const char* id, liz_desktop_app* out)
+static bool liz_defaults_load(const char* id, liz_desktop_app* out)
 {
     if (!id || !id[0] || strchr(id, '/') != NULL)
         return false;
@@ -62,14 +62,14 @@ static bool liz_apps_load(const char* id, liz_desktop_app* out)
         if (liz_fs_join(apps, sizeof(apps), dirs[i], "applications") != 0)
             continue;
         if (liz_fs_join(file, sizeof(file), apps, id) == 0)
-            text = liz_apps_slurp(file);
+            text = liz_defaults_slurp(file);
 
         for (const char* dash = strchr(id, '-'); dash && !text; dash = strchr(dash + 1, '-')) {
             char nested[LIZ_APP_ID_MAX];
             snprintf(nested, sizeof(nested), "%s", id);
             nested[dash - id] = '/';
             if (liz_fs_join(file, sizeof(file), apps, nested) == 0)
-                text = liz_apps_slurp(file);
+                text = liz_defaults_slurp(file);
         }
     }
     if (!text)
@@ -101,7 +101,7 @@ static bool liz_apps_load(const char* id, liz_desktop_app* out)
 
 /* Calls `visit` for each id in a "a.desktop;b.desktop;" list until one
  * returns true. */
-static bool liz_apps_each_id(char* list, bool (*visit)(const char* id, void* data),
+static bool liz_defaults_each_id(char* list, bool (*visit)(const char* id, void* data),
                             void* data)
 {
     char* cursor = list;
@@ -124,7 +124,7 @@ static bool liz_apps_each_id(char* list, bool (*visit)(const char* id, void* dat
  * them: the user's configuration first, then system configuration, then the
  * per-applications-directory lists. Desktop-specific lists shadow the plain
  * ones. Returns how many paths were written. */
-static int liz_apps_assoc_files(char out[][PATH_MAX], int max)
+static int liz_defaults_assoc_files(char out[][PATH_MAX], int max)
 {
     const char* desktop = getenv("XDG_CURRENT_DESKTOP");
     char lower[64] = "";
@@ -171,16 +171,16 @@ static int liz_apps_assoc_files(char out[][PATH_MAX], int max)
     return count;
 }
 
-static bool liz_apps_load_into(const char* id, void* data)
+static bool liz_defaults_load_into(const char* id, void* data)
 {
-    return liz_apps_load(id, (liz_desktop_app*)data);
+    return liz_defaults_load(id, (liz_desktop_app*)data);
 }
 
 /* Every MIME type that could describe `name`, each followed by its
  * aliases, most specific first. Both halves matter: an extension can be
  * claimed by several types, and an application may have registered any of
  * the spellings a type is known by. */
-static int liz_apps_types(const char* name, char out[][LIZ_MIME_MAX], int max)
+static int liz_defaults_types(const char* name, char out[][LIZ_MIME_MAX], int max)
 {
     char types[LIZ_MIME_TYPES_MAX][LIZ_MIME_MAX];
     int ntypes = liz_mime_types(name, types, LIZ_MIME_TYPES_MAX);
@@ -204,26 +204,26 @@ static int liz_apps_types(const char* name, char out[][LIZ_MIME_MAX], int max)
     return n;
 }
 
-bool liz_apps_default(const char* path, liz_desktop_app* out)
+bool liz_defaults_default(const char* path, liz_desktop_app* out)
 {
     const char* name = strrchr(path, '/');
     name = name ? name + 1 : path;
 
-    char types[LIZ_APPS_TYPES_MAX][LIZ_MIME_MAX];
-    int ntypes = liz_apps_types(name, types, LIZ_APPS_TYPES_MAX);
+    char types[LIZ_DEFAULTS_TYPES_MAX][LIZ_MIME_MAX];
+    int ntypes = liz_defaults_types(name, types, LIZ_DEFAULTS_TYPES_MAX);
 
     char files[LIZ_XDG_DIRS_MAX * 4][PATH_MAX];
-    int count = liz_apps_assoc_files(files, LIZ_XDG_DIRS_MAX * 4);
+    int count = liz_defaults_assoc_files(files, LIZ_XDG_DIRS_MAX * 4);
 
     for (int i = 0; i < count; i++) {
-        char* text = liz_apps_slurp(files[i]);
+        char* text = liz_defaults_slurp(files[i]);
         if (!text)
             continue;
         bool found = false;
         for (int t = 0; t < ntypes && !found; t++) {
-            char list[LIZ_APPS_ASSOC_MAX];
+            char list[LIZ_DEFAULTS_ASSOC_MAX];
             found = liz_ini_get(text, "Default Applications", types[t], list, sizeof(list))
-                    && liz_apps_each_id(list, liz_apps_load_into, out);
+                    && liz_defaults_each_id(list, liz_defaults_load_into, out);
         }
         free(text);
         if (found)
@@ -236,20 +236,20 @@ typedef struct {
     liz_desktop_app* out;
     int count;
     int max;
-} liz_apps_collect;
+} liz_defaults_collect;
 
 /* Appends `id` unless it is already in the list. Returns true only when
- * the output is full, to stop liz_apps_each_id early. */
-static bool liz_apps_collect_id(const char* id, void* data)
+ * the output is full, to stop liz_defaults_each_id early. */
+static bool liz_defaults_collect_id(const char* id, void* data)
 {
-    liz_apps_collect* c = (liz_apps_collect*)data;
+    liz_defaults_collect* c = (liz_defaults_collect*)data;
     if (c->count >= c->max)
         return true;
     for (int i = 0; i < c->count; i++) {
         if (strcmp(c->out[i].id, id) == 0)
             return false;
     }
-    if (!liz_apps_load(id, &c->out[c->count]))
+    if (!liz_defaults_load(id, &c->out[c->count]))
         return false;
 
     /* Several ids can carry one display name, as a browser's versioned and
@@ -262,7 +262,7 @@ static bool liz_apps_collect_id(const char* id, void* data)
     return false;
 }
 
-int liz_apps_candidates(const char* path, liz_desktop_app* out, int max)
+int liz_defaults_candidates(const char* path, liz_desktop_app* out, int max)
 {
     if (max <= 0)
         return 0;
@@ -270,8 +270,8 @@ int liz_apps_candidates(const char* path, liz_desktop_app* out, int max)
     const char* name = strrchr(path, '/');
     name = name ? name + 1 : path;
 
-    char types[LIZ_APPS_TYPES_MAX][LIZ_MIME_MAX];
-    int ntypes = liz_apps_types(name, types, LIZ_APPS_TYPES_MAX);
+    char types[LIZ_DEFAULTS_TYPES_MAX][LIZ_MIME_MAX];
+    int ntypes = liz_defaults_types(name, types, LIZ_DEFAULTS_TYPES_MAX);
 
     /* Both tables are read once and walked per type, because the type has
      * to be the outer loop: an application that registered for the exact
@@ -280,9 +280,9 @@ int liz_apps_candidates(const char* path, liz_desktop_app* out, int max)
      * audio/x-vorbis+ogg an .ogg file usually is. */
     char* assoc[LIZ_XDG_DIRS_MAX * 4];
     char files[LIZ_XDG_DIRS_MAX * 4][PATH_MAX];
-    int nassoc = liz_apps_assoc_files(files, LIZ_XDG_DIRS_MAX * 4);
+    int nassoc = liz_defaults_assoc_files(files, LIZ_XDG_DIRS_MAX * 4);
     for (int i = 0; i < nassoc; i++)
-        assoc[i] = liz_apps_slurp(files[i]);
+        assoc[i] = liz_defaults_slurp(files[i]);
 
     char* caches[LIZ_XDG_DIRS_MAX];
     char dirs[LIZ_XDG_DIRS_MAX][LIZ_XDG_PATH_MAX];
@@ -293,29 +293,29 @@ int liz_apps_candidates(const char* path, liz_desktop_app* out, int max)
         caches[i] = NULL;
         if (liz_fs_join(apps, sizeof(apps), dirs[i], "applications") == 0
             && liz_fs_join(cache, sizeof(cache), apps, "mimeinfo.cache") == 0)
-            caches[i] = liz_apps_slurp(cache);
+            caches[i] = liz_defaults_slurp(cache);
     }
 
-    liz_apps_collect collect = { out, 0, max };
-    if (liz_apps_default(path, &out[0]))
+    liz_defaults_collect collect = { out, 0, max };
+    if (liz_defaults_default(path, &out[0]))
         collect.count = 1;
 
     for (int t = 0; t < ntypes; t++) {
-        char list[LIZ_APPS_ASSOC_MAX];
+        char list[LIZ_DEFAULTS_ASSOC_MAX];
 
         /* what the user added by hand comes before what applications
          * registered for themselves */
         for (int i = 0; i < nassoc; i++) {
             if (assoc[i] && liz_ini_get(assoc[i], "Added Associations", types[t],
                                         list, sizeof(list)))
-                liz_apps_each_id(list, liz_apps_collect_id, &collect);
+                liz_defaults_each_id(list, liz_defaults_collect_id, &collect);
         }
         /* mimeinfo.cache is what update-desktop-database builds from every
          * installed entry's own MimeType line */
         for (int i = 0; i < ndata; i++) {
             if (caches[i] && liz_ini_get(caches[i], "MIME Cache", types[t],
                                          list, sizeof(list)))
-                liz_apps_each_id(list, liz_apps_collect_id, &collect);
+                liz_defaults_each_id(list, liz_defaults_collect_id, &collect);
         }
     }
 
@@ -333,7 +333,7 @@ int liz_apps_candidates(const char* path, liz_desktop_app* out, int max)
  * (%i, %c, %k and the deprecated codes) carry no meaning here and are
  * dropped rather than passed through as literal text. Quoting follows the
  * desktop entry spec: double quotes group, backslash escapes inside them. */
-static int liz_apps_build_argv(const char* exec, const char* path,
+static int liz_defaults_build_argv(const char* exec, const char* path,
                               char* store, size_t storesz,
                               char** argv, int argv_max)
 {
@@ -409,12 +409,12 @@ static int liz_apps_build_argv(const char* exec, const char* path,
     return argc;
 }
 
-void liz_apps_exec(const liz_desktop_app* app, const char* path)
+void liz_defaults_exec(const liz_desktop_app* app, const char* path)
 {
     char store[LIZ_APP_EXEC_MAX + PATH_MAX + 64];
     char* argv[32];
 
-    if (liz_apps_build_argv(app->exec, path, store, sizeof(store), argv,
+    if (liz_defaults_build_argv(app->exec, path, store, sizeof(store), argv,
                             (int)(sizeof(argv) / sizeof(argv[0]))) <= 0)
         return;
 
@@ -439,16 +439,16 @@ void liz_apps_exec(const liz_desktop_app* app, const char* path)
     execvp(term, targv);
 }
 
-bool liz_apps_for(const char* path, liz_desktop_app* out)
+bool liz_defaults_for(const char* path, liz_desktop_app* out)
 {
-    if (liz_apps_default(path, out))
+    if (liz_defaults_default(path, out))
         return true;
 
     /* Nothing is set as the default for this type. The first application
      * that registered for it still beats handing the file to xdg-open,
      * which would route it through the web browser. */
-    liz_desktop_app all[LIZ_APPS_MAX];
-    if (liz_apps_candidates(path, all, LIZ_APPS_MAX) <= 0)
+    liz_desktop_app all[LIZ_DEFAULTS_MAX];
+    if (liz_defaults_candidates(path, all, LIZ_DEFAULTS_MAX) <= 0)
         return false;
     *out = all[0];
     return true;

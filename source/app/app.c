@@ -1,5 +1,6 @@
 #include "app/app.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,7 +16,7 @@
 
 #include <fontconfig/fontconfig.h>
 
-#include "apps/apps.h"
+#include "defaults/defaults.h"
 #include "icons/icons.h"
 #include "ui/chooser.h"
 #include "ui/delete.h"
@@ -56,6 +57,35 @@ static const struct liz_keybind liz_keybinds[] = {
     LIZ_BIND_RENAME,
     LIZ_BIND_GO_HOME,
     LIZ_BIND_CLOSE_PREVIEW,
+    LIZ_BIND_DELETE,
+};
+
+/* Non-vim mode keybindings (LIZ_VIM_MODE_DEFAULT 0): plain unmodified
+ * characters are reserved for type-to-search, so every default lives on a
+ * modifier or a text-free key. */
+#define LIZ_NOVIM_KEYBIND_COUNT                                               \
+    (sizeof(liz_novim_keybinds) / sizeof(liz_novim_keybinds[0]))
+
+static const struct liz_keybind liz_novim_keybinds[] = {
+    LIZ_NOVIM_BIND_QUIT,
+    LIZ_NOVIM_BIND_NAV_EDIT,
+    LIZ_NOVIM_BIND_TOGGLE_HIDDEN,
+    LIZ_NOVIM_BIND_TOGGLE_SIDEBAR,
+    LIZ_NOVIM_BIND_HALF_DOWN,
+    LIZ_NOVIM_BIND_HALF_UP,
+    LIZ_NOVIM_BIND_HISTORY_BACK,
+    LIZ_NOVIM_BIND_HISTORY_FORWARD,
+    LIZ_NOVIM_BIND_COPY,
+    LIZ_NOVIM_BIND_CUT,
+    LIZ_NOVIM_BIND_PASTE,
+    LIZ_NOVIM_BIND_PREVIEW,
+    LIZ_NOVIM_BIND_NEW_FOLDER,
+    LIZ_NOVIM_BIND_OPEN_TERMINAL,
+    LIZ_NOVIM_BIND_OPEN_TERMINAL_DIR,
+    LIZ_NOVIM_BIND_RENAME,
+    LIZ_NOVIM_BIND_GO_HOME,
+    LIZ_NOVIM_BIND_CLOSE_PREVIEW,
+    LIZ_NOVIM_BIND_DELETE,
 };
 
 double liz_app_now(void)
@@ -212,6 +242,8 @@ void liz_app_navigate(liz_app* app, const char* path)
             app->vim.pending_g = false;
             app->vim.pending_d = false;
             app->vim.visual_active = false;
+            app->novim_search.active = false;
+            app->novim_search.query[0] = '\0';
 
             if (app->win)
                 XStoreName(app->win->display, app->win->window, canon);
@@ -273,6 +305,8 @@ void liz_app_navigate(liz_app* app, const char* path)
     app->vim.pending_g = false;
     app->vim.pending_d = false;
     app->vim.visual_active = false;
+    app->novim_search.active = false;
+    app->novim_search.query[0] = '\0';
 
     if (app->win)
         XStoreName(app->win->display, app->win->window, canon);
@@ -484,12 +518,12 @@ void liz_app_open_file(liz_app* app, const char* path)
 {
     (void)app;
     liz_desktop_app handler;
-    bool resolved = liz_apps_for(path, &handler);
+    bool resolved = liz_defaults_for(path, &handler);
 
     if (!liz_app_detach())
         return;
     if (resolved)
-        liz_apps_exec(&handler, path); /* only returns if it could not run */
+        liz_defaults_exec(&handler, path); /* only returns if it could not run */
     execlp("xdg-open", "xdg-open", path, (char*)NULL);
     _exit(127);
 }
@@ -505,7 +539,7 @@ void liz_app_open_row_with(liz_app* app, int row, const liz_desktop_app* with)
 
     if (!liz_app_detach())
         return;
-    liz_apps_exec(with, path);
+    liz_defaults_exec(with, path);
     _exit(127);
 }
 
@@ -1275,9 +1309,135 @@ static bool liz_action_handle(liz_app* app, enum liz_action action)
     case LIZ_ACTION_CLOSE_PREVIEW:
         liz_preview_close(app);
         return true;
+    case LIZ_ACTION_DELETE:
+        /* the standard file-manager Delete key: delete the selection, or
+         * the focused row when there is none (same as vim's Delete) */
+        if (liz_app_selection_count(app) > 0)
+            liz_delete_start_selection(app);
+        else
+            liz_delete_start_range(app, app->selected, app->selected);
+        return true;
     case LIZ_ACTION_NONE:
         break;
     }
+    return false;
+}
+
+/* --- non-vim mode: incremental type-to-search --------------------------- */
+
+static bool liz_novim_ci_contains(const char* hay, const char* needle)
+{
+    size_t hn = strlen(hay), nn = strlen(needle);
+    if (nn > hn)
+        return false;
+    for (size_t i = 0; i + nn <= hn; i++) {
+        size_t j = 0;
+        for (; j < nn; j++) {
+            if (tolower((unsigned char)hay[i + j]) != tolower((unsigned char)needle[j]))
+                break;
+        }
+        if (j == nn)
+            return true;
+    }
+    return false;
+}
+
+/* First row at or after `start` (wrapping) whose name contains `query`, or
+ * -1 when there are no entries or no match anywhere. */
+static int liz_novim_find_first(liz_app* app, const char* query, int start)
+{
+    int n = (int)app->entry_count;
+    if (n == 0 || query[0] == '\0')
+        return -1;
+    for (int off = 0; off < n; off++) {
+        int i = (start + off) % n;
+        if (i < 0)
+            i += n;
+        if (liz_novim_ci_contains(app->entries[i].name, query))
+            return i;
+    }
+    return -1;
+}
+
+/* Re-runs the search from the anchor, jumping the selection live to the
+ * first match; clears the search once the query is emptied out. */
+static void liz_novim_search_preview(liz_app* app)
+{
+    liz_novim_search* s = &app->novim_search;
+    if (s->query[0] == '\0') {
+        s->active = false;
+        liz_app_set_selected(app, s->anchor);
+        return;
+    }
+    s->active = true;
+    int idx = liz_novim_find_first(app, s->query, s->anchor);
+    if (idx >= 0)
+        liz_app_set_selected(app, idx);
+}
+
+static void liz_novim_search_clear(liz_app* app)
+{
+    liz_novim_search* s = &app->novim_search;
+    s->active = false;
+    s->query[0] = '\0';
+    liz_app_set_selected(app, s->anchor);
+}
+
+static void liz_novim_search_backspace(liz_app* app)
+{
+    liz_novim_search* s = &app->novim_search;
+    int len = (int)strlen(s->query);
+    if (len == 0)
+        return;
+    int i = len;
+    do {
+        i--;
+    } while (i > 0 && ((s->query[i] & 0xC0) == 0x80));
+    s->query[i] = '\0';
+    liz_novim_search_preview(app);
+}
+
+/* Handles the non-vim mode keys: every printable keystroke feeds the
+ * incremental search, and Escape/BackSpace clear it while it is active.
+ * Returns true if the key was consumed. */
+static bool liz_novim_handle_key(liz_app* app, xc_event ev)
+{
+    liz_novim_search* s = &app->novim_search;
+
+    if (ev.key == XK_Escape) {
+        if (s->active) {
+            liz_novim_search_clear(app);
+            return true;
+        }
+        return false; /* let CLOSE_PREVIEW / other plain bindings run */
+    }
+
+    if (ev.key == XK_BackSpace) {
+        if (!s->active)
+            return false; /* plain BackSpace goes to the parent directory */
+        if (s->query[0] != '\0')
+            liz_novim_search_backspace(app);
+        else
+            liz_novim_search_clear(app);
+        return true;
+    }
+
+    /* printable text starts or extends the search */
+    if (ev.nchars > 0 && (unsigned char)ev.chars[0] >= 0x20 && ev.chars[0] != 0x7F) {
+        if (!s->active) {
+            s->active = true;
+            s->anchor = app->selected;
+            s->query[0] = '\0';
+        }
+        int len = (int)strlen(s->query);
+        if (len + ev.nchars < (int)sizeof(s->query)) {
+            memcpy(s->query + len, ev.chars, (size_t)ev.nchars);
+            s->query[len + ev.nchars] = '\0';
+            liz_novim_search_preview(app);
+        }
+        return true;
+    }
+
     return false;
 }
 
@@ -1288,8 +1448,12 @@ static void liz_app_handle_key(liz_app* app, xc_event ev)
     if (liz_key_is_modifier(ev.key))
         return;
 
-    enum liz_action action = liz_keybind_resolve(
-        ev.key, ev.state, liz_keybinds, LIZ_KEYBIND_COUNT);
+    const struct liz_keybind* binds =
+        app->vim_mode ? liz_keybinds : liz_novim_keybinds;
+    int bind_count =
+        app->vim_mode ? LIZ_KEYBIND_COUNT : LIZ_NOVIM_KEYBIND_COUNT;
+
+    enum liz_action action = liz_keybind_resolve(ev.key, ev.state, binds, bind_count);
 
     /* quit works from absolutely anywhere */
     if (action == LIZ_ACTION_QUIT) {
@@ -1344,28 +1508,39 @@ static void liz_app_handle_key(liz_app* app, xc_event ev)
             return;
     }
 
-    /* VISUAL mode captures movement keys; keys it does not handle exit
-     * VISUAL and fall through to normal handling */
-    if (app->vim.visual_active) {
-        if (liz_vim_handle_visual_key(app, ev))
+    if (app->vim_mode) {
+        /* VISUAL mode captures movement keys; keys it does not handle exit
+         * VISUAL and fall through to normal handling */
+        if (app->vim.visual_active) {
+            if (liz_vim_handle_visual_key(app, ev))
+                return;
+        }
+
+        /* COMMAND mode (typing a search or an ex command) captures all input
+         * until submitted or cancelled; nothing else in this function should
+         * run. */
+        if (app->vim.mode == LIZ_VIM_COMMAND) {
+            liz_vim_handle_command_key(app, ev);
+            return;
+        }
+
+        /* NORMAL mode: vim motions/commands first, then the remaining
+         * configurable plain-key bindings. */
+        if (liz_vim_handle_normal_key(app, ev))
+            return;
+
+        if (action != LIZ_ACTION_NONE && liz_action_handle(app, action))
+            return;
+    } else {
+        /* non-vim mode: printable keys feed the incremental search, with
+         * Escape/BackSpace clearing it; the (exclusively modifier/f-key)
+         * bindings then run. */
+        if (liz_novim_handle_key(app, ev))
+            return;
+
+        if (action != LIZ_ACTION_NONE && liz_action_handle(app, action))
             return;
     }
-
-    /* COMMAND mode (typing a search or an ex command) captures all input
-     * until submitted or cancelled; nothing else in this function should
-     * run. */
-    if (app->vim.mode == LIZ_VIM_COMMAND) {
-        liz_vim_handle_command_key(app, ev);
-        return;
-    }
-
-    /* NORMAL mode: vim motions/commands first, then the remaining
-     * configurable plain-key bindings. */
-    if (liz_vim_handle_normal_key(app, ev))
-        return;
-
-    if (action != LIZ_ACTION_NONE && liz_action_handle(app, action))
-        return;
 
     switch (ev.key) {
     case XK_Down:
@@ -1926,11 +2101,18 @@ int liz_app_init(liz_app* app)
     memset(app, 0, sizeof(*app));
     app->last_list_visible = -1;
 
-    xwindow* win = xc_window_create(120, 120, 900, 600, liz_theme_bg, "lizaveta");
+    /* translucent background: fold the configured opacity into the theme's
+     * background alpha; xc_window_create picks an ARGB visual for it */
+    xc_color bg = liz_theme_bg;
+    bg.a = (uint8_t)(LIZ_BG_OPACITY * 255.0 + 0.5);
+    xwindow* win = xc_window_create(120, 120, 900, 600, bg, "lizaveta");
     if (win)
         xc_set_class(win, "lizaveta", "lizaveta");
     if (!win)
         return -1;
+#if LIZ_BG_BLUR
+    xc_set_blur_behind(win, true);
+#endif
     app->win = win;
     win->events = liz_app_on_event;
     win->userdata = app;
@@ -1959,6 +2141,7 @@ int liz_app_init(liz_app* app)
     app->sidebar_visible = true;
 
     liz_vim_init(&app->vim);
+    app->vim_mode = LIZ_VIM_MODE_DEFAULT;
     liz_sidebar_init(app);
 #ifdef ICON_SUPPORT
     liz_icons_init();

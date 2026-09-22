@@ -10,7 +10,7 @@
 #include "rendering/x11/xc.h"
 #include "fs/fs.h"
 #include "ui/editor.h"
-#include "apps/apps.h"
+#include "defaults/defaults.h"
 #include "ui/ui.h"
 #include "ui/vim.h"
 
@@ -158,7 +158,7 @@ typedef struct {
     int data; /* action-specific payload, unused by most actions */
 } liz_menu_item;
 
-#define LIZ_MENU_ITEMS_MAX (LIZ_APPS_MAX + 8)
+#define LIZ_MENU_ITEMS_MAX (LIZ_DEFAULTS_MAX + 8)
 
 typedef struct {
     bool active;
@@ -169,7 +169,7 @@ typedef struct {
     int width;      /* widened to fit the longest label */
     /* applications that can open the row the menu was opened on, filled in
      * when the menu is built so the "Open with" list is ready to show */
-    liz_desktop_app apps[LIZ_APPS_MAX];
+    liz_desktop_app apps[LIZ_DEFAULTS_MAX];
     int app_count;
     int row;        /* list row right-clicked, -1 when the click was on empty space */
     liz_menu_source source;  /* which view the menu was opened from */
@@ -255,6 +255,16 @@ typedef struct {
     char name_err[256];
 } liz_chooser;
 
+/* Non-vim incremental type-to-search: `query` is the substring being
+ * matched, the selection is live-jumped to the first match, and `anchor`
+ * remembers the row where typing began so Escape or backspacing the query
+ * empty can restore it. Unused when vim_mode is true. */
+typedef struct {
+    bool active;
+    char query[256];
+    int anchor;
+} liz_novim_search;
+
 typedef struct liz_app {
     xwindow* win;
 
@@ -339,6 +349,14 @@ typedef struct liz_app {
     int dnd_x, dnd_y;
 
     liz_vim_state vim;
+
+    /* The input mode, selected at compile time via LIZ_VIM_MODE_DEFAULT:
+     * true = vim mode (/, :, h/j/k/l, plain-letter bindings), false = the
+     * non-vim mode where unmodified printable keys start an incremental
+     * type-to-search and the LIZ_NOVIM_BIND_* table is in effect. */
+    bool vim_mode;
+
+    liz_novim_search novim_search;
 
 #ifdef ARCHIVE_SUPPORT
     liz_archive_state archive;

@@ -6,7 +6,6 @@ Graphical X11 file manager with VIM bindings, written in C.
 
 - Drag and drop support.
 - Mounted device navigation.
-- Macro support.
 - Embedded preview processes.
      - Built-in image _feh_ & text _st+vim_ preview.
 - Supports `--filechooser` protocol.
@@ -15,6 +14,8 @@ Graphical X11 file manager with VIM bindings, written in C.
      - Configure with `xmake f --icons=y`
 - Optional archive support via libarchive.
      - Configure with `xmake f --archives=y`
+- Vim input mode (on by default); disable for the non-vim type-to-search mode.
+     - Configure with `xmake f --vimmode=n`
 - Minimal and launches very quickly.
 
 ## Configuration
@@ -91,6 +92,45 @@ Runs as a seperate process, embedded using Xlib.
 | `Ctrl` + `l` | Focus on nav |
 | `Ctrl` + `Enter` | Save as |
 | `Shift` + `t` | Open directory at cursor in terminal |
+| `Ctrl` + `Alt` + `d` | Quit |
+
+## Non-vim mode keybindings
+
+These are the default bindings when the non-vim input mode is selected.
+
+### Search
+| Key | Action |
+|----------|--------|
+| letters/digits/typing | Incremental search; selection jumps to the first match |
+| `Enter` | Open the matched file/folder |
+| `BackSpace` | Remove the last character of the query |
+| `Esc` | Clear the search |
+
+### Filesystem
+| Key | Action |
+|----------|--------|
+| `Delete` | Delete selection |
+| `F2` | Rename |
+| `Ctrl` + `n` | Create folder |
+| `Ctrl` + `d` | Scroll half page down |
+| `Ctrl` + `u` | Scroll half page up |
+| `Ctrl` + `o` | Jump history back |
+| `Ctrl` + `i` | Jump history forward |
+
+### Interface
+| Key | Action |
+|----------|--------|
+| `Ctrl` + `c` | Copy |
+| `Ctrl` + `x` | Cut |
+| `Ctrl` + `v` | Paste |
+| `Ctrl` + `p` | Preview file |
+| `Ctrl` + `t` | Open current directory in terminal |
+| `Ctrl` + `Shift` + `t` | Open directory at cursor in terminal |
+| `Alt` + `Home` | Navigate to home directory |
+| `Ctrl` + `h` | Toggle hidden files |
+| `Ctrl` + `b` | Sidebar |
+| `Ctrl` + `l` | Focus on nav |
+| `Esc` | Close preview |
 | `Ctrl` + `Alt` + `d` | Quit |
 
 ## Commands
