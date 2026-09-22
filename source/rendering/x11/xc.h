@@ -170,6 +170,11 @@ static inline void xc_set_dialog(xwindow* w);
 static inline void xc_center_on_monitor(xwindow* w, int width, int height);
 static inline void xc_run(xwindow* w);
 
+/* Asks the compositor to gaussian-blur whatever is behind the window
+ * (_NET_WM_BLUR_BEHIND_REGION). Only meaningful on a window whose content
+ * has alpha (bg.a < 255) and with a compositor that honors the hint. */
+static inline void xc_set_blur_behind(xwindow* w, bool on);
+
 /* ---- clipboard API ----
 
  * Owns the CLIPBOARD selection with `text`/`len` as the payload (UTF-8).
@@ -270,6 +275,70 @@ static inline void xc_resize_buffer(xwindow* w)
     w->buffer_pic = fmt ? XRenderCreatePicture(w->display, w->buffer, fmt, 0, NULL) : None;
 }
 
+/* A Visual that can hold per-pixel alpha (a 32-bit TrueColor visual whose
+ * XRender format has an alpha channel), or NULL when the server or driver
+ * has none -- which is also the no-compositor case. */
+static inline Visual* xc_find_argb_visual(xwindow* w)
+{
+    XVisualInfo tmpl;
+    tmpl.screen = w->screen;
+    tmpl.depth = 32;
+    tmpl.class = TrueColor;
+    int n = 0;
+    XVisualInfo* vi = XGetVisualInfo(w->display,
+                                     VisualScreenMask | VisualDepthMask | VisualClassMask,
+                                     &tmpl, &n);
+    Visual* best = NULL;
+    for (int i = 0; i < n; i++) {
+        XRenderPictFormat* fmt = XRenderFindVisualFormat(w->display, vi[i].visual);
+        if (fmt && fmt->type == PictTypeDirect && fmt->direct.alphaMask != 0) {
+            best = vi[i].visual;
+            break;
+        }
+    }
+    if (vi)
+        XFree(vi);
+    return best;
+}
+
+/* Fills a rectangle of the backing picture with `c`, alpha included. The
+ * color is premultiplied (as XRender expects) and composite-Over'ed, so it
+ * stacks correctly with whatever is already in the buffer. Only used when
+ * the buffer is a 32-bit ARGB drawable. */
+static inline void xc_fill_pict(xwindow* w, int x, int y, unsigned int width,
+                                unsigned int height, xc_color c)
+{
+    if (w->buffer_pic == None || width == 0 || height == 0)
+        return;
+    unsigned f = (unsigned)c.a;
+    unsigned r = ((unsigned)c.r * f + 127) / 255;
+    unsigned g = ((unsigned)c.g * f + 127) / 255;
+    unsigned b = ((unsigned)c.b * f + 127) / 255;
+    XRenderColor rc;
+    rc.alpha = (unsigned short)((f << 8) | f);
+    rc.red = (unsigned short)((r << 8) | r);
+    rc.green = (unsigned short)((g << 8) | g);
+    rc.blue = (unsigned short)((b << 8) | b);
+    XRenderFillRectangle(w->display, PictOpOver, w->buffer_pic, &rc,
+                         x, y, width, height);
+}
+
+static inline int* xc_win_err_count(void)
+{
+    static int count;
+    return &count;
+}
+
+/* Swallows an X error so xc_window_create can detect (and recover from) a
+ * rejected 32-bit window instead of letting Xlib abort the process. */
+static inline int xc_win_err_handler(Display* d, XErrorEvent* ev)
+{
+    (void)d;
+    (void)ev;
+    (*xc_win_err_count())++;
+    return 0;
+}
+
 static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_color bg, const char* title)
 {
     xwindow* w = (xwindow*)calloc(1, sizeof(xwindow));
@@ -294,17 +363,80 @@ static inline xwindow* xc_window_create(int x, int y, int width, int height, xc_
     w->buffer = None;
     w->buffer_pic = None;
 
+    /* a translucent background needs a visual with per-pixel alpha; if the
+     * server has none -- or rejects a 32-bit window, which some drivers
+     * (NVIDIA) intermittently do -- fall back to a plain opaque window. */
+    bool argb = bg.a < 255;
+    Colormap argb_cm = None;
+    if (argb) {
+        Visual* av = xc_find_argb_visual(w);
+        if (!av) {
+            argb = false;
+        } else {
+            w->visual = av;
+            w->depth = 32;
+            argb_cm = XCreateColormap(w->display, DefaultRootWindow(w->display), av, AllocNone);
+            if (argb_cm == None)
+                argb = false;
+            if (argb)
+                w->colormap = argb_cm;
+        }
+    }
+
     XSetWindowAttributes attr;
     memset(&attr, 0, sizeof(attr));
-    attr.background_pixel = BlackPixel(w->display, w->screen);
-    attr.border_pixel = BlackPixel(w->display, w->screen);
+    /* an ARGB window starts out fully transparent (zero); the app repaints
+     * it with its own translucent background on every frame */
+    attr.background_pixel = argb ? 0 : BlackPixel(w->display, w->screen);
+    attr.border_pixel = attr.background_pixel;
     attr.colormap = w->colormap;
-    attr.event_mask = ButtonPressMask | ButtonReleaseMask | KeyPressMask
-                    | PointerMotionMask | ExposureMask | StructureNotifyMask;
+    /* A wide event mask on a 32-bit depth window makes some servers reject
+     * the request with BadMatch. Ask for the full mask only after the window
+     * exists, via XSelectInput. */
+    attr.event_mask = ExposureMask;
 
-    w->window = XCreateWindow(w->display, DefaultRootWindow(w->display),
-                              x, y, width, height, 1, w->depth, InputOutput,
-                              w->visual, CWBackPixel | CWColormap | CWEventMask, &attr);
+    if (argb) {
+        /* Try the 32-bit window; some drivers intermittently fail it, so
+         * detect the error instead of crashing and retry opaquely. */
+        *xc_win_err_count() = 0;
+        XErrorHandler prev = XSetErrorHandler(xc_win_err_handler);
+        w->window = XCreateWindow(w->display, DefaultRootWindow(w->display),
+                                  x, y, width, height, 1, w->depth, InputOutput,
+                                  w->visual,
+                                  CWBackPixel | CWBorderPixel | CWColormap | CWEventMask, &attr);
+        XSync(w->display, False);
+        XSetErrorHandler(prev);
+        if (*xc_win_err_count() != 0) {
+            w->window = None;
+            XFreeColormap(w->display, argb_cm);
+            argb = false;
+        }
+    }
+
+    if (!argb) {
+        /* plain opaque window on the default visual, colour as before */
+        w->visual = DefaultVisual(w->display, w->screen);
+        w->depth = DefaultDepth(w->display, w->screen);
+        w->colormap = DefaultColormap(w->display, w->screen);
+        w->bg.a = 255;
+        attr.background_pixel = BlackPixel(w->display, w->screen);
+        attr.border_pixel = attr.background_pixel;
+        attr.colormap = w->colormap;
+        w->window = XCreateWindow(w->display, DefaultRootWindow(w->display),
+                                  x, y, width, height, 1, w->depth, InputOutput,
+                                  w->visual,
+                                  CWBackPixel | CWBorderPixel | CWColormap | CWEventMask, &attr);
+    }
+
+    if (w->window == None) {
+        fprintf(stderr, "xc: cannot create window\n");
+        XCloseDisplay(w->display);
+        free(w);
+        return NULL;
+    }
+    XSelectInput(w->display, w->window,
+                 ButtonPressMask | ButtonReleaseMask | KeyPressMask
+                 | PointerMotionMask | ExposureMask | StructureNotifyMask);
 
     w->gc = XCreateGC(w->display, w->window, 0, NULL);
     XSetLineAttributes(w->display, w->gc, 1, LineSolid, CapButt, JoinMiter);
@@ -391,6 +523,23 @@ static inline void xc_set_dialog(xwindow* w)
     Atom dialog = XInternAtom(w->display, "_NET_WM_WINDOW_TYPE_DIALOG", False);
     XChangeProperty(w->display, w->window, type, XA_ATOM, 32, PropModeReplace,
                     (unsigned char*)&dialog, 1);
+}
+
+/* Asks the compositor to gaussian-blur the desktop behind the window. A
+ * zeroed region [x, y, width, height] means "the whole window", which is
+ * how compton/picom codify it. The blur radius is the compositor's own
+ * setting; the hint only toggles blur here. */
+static inline void xc_set_blur_behind(xwindow* w, bool on)
+{
+    Atom blur = XInternAtom(w->display, "_NET_WM_BLUR_BEHIND_REGION", False);
+    if (on) {
+        unsigned long region[4] = { 0, 0, 0, 0 };
+        XChangeProperty(w->display, w->window, blur, XA_CARDINAL, 32,
+                        PropModeReplace, (unsigned char*)region, 4);
+    } else {
+        XDeleteProperty(w->display, w->window, blur);
+    }
+    XFlush(w->display);
 }
 
 /* The monitor the pointer is on, in root coordinates.
@@ -1335,18 +1484,53 @@ static inline void xc_window_destroy(xwindow* w)
 
 static inline void xc_clear(xwindow* w)
 {
-    XSetForeground(w->display, w->gc, xc_pixel(w, w->bg));
-    XFillRectangle(w->display, w->buffer, w->gc, 0, 0, w->width, w->height);
+    if (w->depth == 32 && w->buffer_pic != None) {
+        /* transparent backdrop: fill with the (possibly translucent)
+         * background so the compositing desktop shows through */
+        xc_fill_pict(w, 0, 0, (unsigned)w->width, (unsigned)w->height, w->bg);
+    } else {
+        XSetForeground(w->display, w->gc, xc_pixel(w, w->bg));
+        XFillRectangle(w->display, w->buffer, w->gc, 0, 0, w->width, w->height);
+    }
 }
 
 static inline void xc_rect(xwindow* w, int x, int y, int width, int height, xc_color c)
 {
-    XSetForeground(w->display, w->gc, xc_pixel(w, c));
-    XFillRectangle(w->display, w->buffer, w->gc, x, y, width, height);
+    if (width < 1 || height < 1)
+        return;
+    if (w->depth == 32 && w->buffer_pic != None) {
+        /* XFillRectangle cannot write alpha, so alpha-aware shapes go
+         * through XRender; the pixels stay premultiplied ARGB */
+        xc_fill_pict(w, x, y, (unsigned)width, (unsigned)height, c);
+    } else {
+        XSetForeground(w->display, w->gc, xc_pixel(w, c));
+        XFillRectangle(w->display, w->buffer, w->gc, x, y, width, height);
+    }
 }
 
 static inline void xc_line(xwindow* w, int x1, int y1, int x2, int y2, xc_color c)
 {
+    if (w->depth == 32 && w->buffer_pic != None) {
+        /* 1px Bresenham line, drawn with XRender so alpha survives */
+        int dx = abs(x2 - x1), sx = x1 < x2 ? 1 : -1;
+        int dy = -abs(y2 - y1), sy = y1 < y2 ? 1 : -1;
+        int err = dx + dy;
+        for (;;) {
+            xc_fill_pict(w, x1, y1, 1, 1, c);
+            if (x1 == x2 && y1 == y2)
+                break;
+            int e2 = 2 * err;
+            if (e2 >= dy) {
+                err += dy;
+                x1 += sx;
+            }
+            if (e2 <= dx) {
+                err += dx;
+                y1 += sy;
+            }
+        }
+        return;
+    }
     XSetForeground(w->display, w->gc, xc_pixel(w, c));
     XDrawLine(w->display, w->buffer, w->gc, x1, y1, x2, y2);
 }

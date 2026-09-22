@@ -48,9 +48,18 @@ static bool liz_slave_image_matches(const liz_fs_entry* e)
     return false;
 }
 
-/* Window title the image slave is told to use; the manager matches this and
- * the image basename. */
-#define LIZ_PREVIEW_WINDOW_TITLE "lzaveta-preview"
+/* argv templates from config; placeholders like {geo} are expanded at spawn
+ * time by liz_preview_make_command(). See config/defaults.h. */
+static const char* const liz_preview_image_tmpl[] = LIZ_PREVIEW_IMAGE_ARGV;
+static const char* const liz_preview_text_tmpl[] = LIZ_PREVIEW_TEXT_ARGV;
+
+#define LIZ_PREVIEW_IMAGE_TMPL_COUNT \
+    (sizeof(liz_preview_image_tmpl) / sizeof(liz_preview_image_tmpl[0]))
+#define LIZ_PREVIEW_TEXT_TMPL_COUNT \
+    (sizeof(liz_preview_text_tmpl) / sizeof(liz_preview_text_tmpl[0]))
+
+/* Longest expanded argv slot: a {path} fills nearly PATH_MAX bytes. */
+#define LIZ_PREVIEW_TOKEN_MAX (PATH_MAX + 128)
 
 static struct {
     Display* dpy;         /* set on the first sync */
@@ -66,74 +75,134 @@ static struct {
 
     Window slave;         /* embedded window, None when pending/absent */
     int x, y, w, h;       /* pane geometry in main-window coordinates */
-    char geo[64];         /* geometry string handed to the image/text slave */
+    char geo[64];         /* {geo}: pane geometry in app-window coords */
+    char sgeo[64];        /* {screen}: pane geometry in screen coords */
+
+    char winid[32];       /* {win}: this window's id, "0x..." */
+    char scratch[LIZ_PREVIEW_ARGV_MAX][LIZ_PREVIEW_TOKEN_MAX]; /* placeholder expansion */
 } g_pv;
+
+/* Snapshot the pane geometry into g_pv.geo (app-window coords) and g_pv.sgeo
+ * (screen coords) for the {geo}/{screen} placeholders. */
+static void liz_preview_set_geos(const liz_preview_geom* geom)
+{
+    snprintf(g_pv.geo, sizeof(g_pv.geo), "%dx%d+%d+%d",
+             geom->w, geom->h, geom->x, geom->y);
+    snprintf(g_pv.sgeo, sizeof(g_pv.sgeo), "%dx%d+%d+%d",
+             geom->w, geom->h, geom->sx, geom->sy);
+}
+
+/* Expands one argv template token into `out`, substituting the runtime
+ * placeholders {geo}/{screen}/{win}/{title}/{path}. Unknown {..} sequences are
+ * copied verbatim. */
+static void liz_preview_expand_token(char* out, size_t outsz, const char* tok,
+                                     const char* path)
+{
+    const struct {
+        const char* name;
+        const char* val;
+    } vars[] = {
+        { "geo",    g_pv.geo    },
+        { "screen", g_pv.sgeo   },
+        { "win",    g_pv.winid  },
+        { "title",  LIZ_PREVIEW_TITLE },
+        { "path",   path        },
+    };
+    const char* p = tok;
+    size_t n = 0;
+    while (*p && n + 1 < outsz) {
+        if (p[0] == '{') {
+            const char* close = strchr(p, '}');
+            if (close) {
+                size_t len = (size_t)(close - p - 1);
+                const char* rep = NULL;
+                for (size_t i = 0; i < sizeof(vars) / sizeof(vars[0]); i++) {
+                    if (strlen(vars[i].name) == len
+                        && strncmp(vars[i].name, p + 1, len) == 0) {
+                        rep = vars[i].val;
+                        break;
+                    }
+                }
+                if (rep) {
+                    size_t rl = strlen(rep);
+                    if (n + rl >= outsz)
+                        rl = outsz - n - 1;
+                    if (rl) {
+                        memcpy(out + n, rep, rl);
+                        n += rl;
+                    }
+                    p = close + 1;
+                    continue;
+                }
+            }
+        }
+        out[n++] = *p++;
+    }
+    out[n] = '\0';
+}
+
+/* Builds the slave command line from an argv template: entries without
+ * placeholders point at the template literal, entries with placeholders are
+ * expanded into g_pv.scratch slots (nothing is ever freed). Returns the
+ * number of arguments, leaving room for the NULL terminator. */
+static int liz_preview_make_command(const char* const* tmpl, size_t count,
+                                    const char* path, const liz_preview_geom* geom,
+                                    char** argv, int cap)
+{
+    (void)geom;
+    snprintf(g_pv.winid, sizeof(g_pv.winid), "0x%lx", (unsigned long)g_pv.main_win);
+    if (count > (size_t)cap - 1)
+        count = (size_t)cap - 1;
+    size_t slot = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (strchr(tmpl[i], '{')) {
+            liz_preview_expand_token(g_pv.scratch[slot],
+                                     sizeof(g_pv.scratch[slot]), tmpl[i], path);
+            argv[i] = g_pv.scratch[slot];
+            slot++;
+        } else {
+            argv[i] = (char*)tmpl[i];
+        }
+    }
+    return (int)count;
+}
 
 static int liz_slave_image_command(const char* path, const liz_preview_geom* geom,
                                   char** argv, int cap)
 {
-    if (cap < 12)
-        return 0;
-    snprintf(g_pv.geo, sizeof(g_pv.geo), "%dx%d+%d+%d",
-             geom->w, geom->h, geom->sx, geom->sy);
-    argv[0] = "feh";
-    argv[1] = "-x";            /* borderless */
-    argv[2] = "-g";            /* initial geometry: avoids the launch flicker */
-    argv[3] = g_pv.geo;
-    argv[4] = "-Z";            /* auto-zoom to fit the window */
-    argv[5] = "--no-fehbg";
-    argv[6] = "--image-bg";
-    argv[7] = "#212128";       /* liz_theme_bg */
-    argv[8] = "--title";
-    argv[9] = LIZ_PREVIEW_WINDOW_TITLE;
-    argv[10] = (char*)path;
-    return 11;
+    liz_preview_set_geos(geom);
+    return liz_preview_make_command(liz_preview_image_tmpl,
+                                    LIZ_PREVIEW_IMAGE_TMPL_COUNT,
+                                    path, geom, argv, cap);
 }
-
 /* Any regular file that no earlier slave claimed (i.e. not an image) is
- * treated as text and previewed with st running vim. */
+ * treated as text and previewed with a terminal running an editor. */
+
 static bool liz_slave_text_matches(const liz_fs_entry* e)
 {
     return e->type == LIZ_FS_FILE;
 }
 
-/* st -e vim runs vim inside the embedded terminal. -G sets the initial
- * geometry in raw pixels (the new st accepts -G instead of the cols/rows
- * -g); with -w it is relative to lizaveta's window. -w embeds the terminal
- * as a child of our window, so the WM never manages it and can never tile
- * it. -n/-c pin the WM_CLASS so the manager can still find the window even
- * after vim renames the title. */
+/* Builds the text-slave command from LIZ_PREVIEW_TEXT_ARGV. With the default
+ * template this is: st -G <geo> -n/-c/-T <marker> -w <winid> -e vim <path>.
+ * -w embeds the terminal as a child of our window so the WM never manages it,
+ * and -n/-c pin the WM_CLASS so the manager can still find the window even
+ * after the editor renames the title. Any terminal/editor may be substituted
+ * for st and vim here. */
 static int liz_slave_text_command(const char* path, const liz_preview_geom* geom,
                                  char** argv, int cap)
 {
-    if (cap < 15)
-        return 0;
-    snprintf(g_pv.geo, sizeof(g_pv.geo), "%dx%d+%d+%d",
-             geom->w, geom->h, geom->x, geom->y);
-    static char winid[32];
-    snprintf(winid, sizeof(winid), "0x%lx", (unsigned long)g_pv.main_win);
-    argv[0] = "st";
-    argv[1] = "-G";            /* raw pixel geometry: no launch flicker */
-    argv[2] = g_pv.geo;
-    argv[3] = "-n";            /* WM_CLASS instance */
-    argv[4] = LIZ_PREVIEW_WINDOW_TITLE;
-    argv[5] = "-c";            /* WM_CLASS class */
-    argv[6] = LIZ_PREVIEW_WINDOW_TITLE;
-    argv[7] = "-T";            /* window title */
-    argv[8] = LIZ_PREVIEW_WINDOW_TITLE;
-    argv[9] = "-w";            /* embed into lizaveta's window */
-    argv[10] = winid;
-    argv[11] = "-e";           /* run vim on the file */
-    argv[12] = "vim";
-    argv[13] = (char*)path;
-    return 14;
+    liz_preview_set_geos(geom);
+    return liz_preview_make_command(liz_preview_text_tmpl,
+                                    LIZ_PREVIEW_TEXT_TMPL_COUNT,
+                                    path, geom, argv, cap);
 }
 
 static const liz_preview_slave liz_preview_slaves[] = {
     { "image", liz_slave_image_matches, liz_slave_image_command,
-      LIZ_PREVIEW_WINDOW_TITLE },
-    { "text", liz_slave_text_matches, liz_slave_text_command,
-      LIZ_PREVIEW_WINDOW_TITLE },
+      LIZ_PREVIEW_TITLE },
+    { "text",  liz_slave_text_matches,  liz_slave_text_command,
+      LIZ_PREVIEW_TITLE },
 };
 
 #define LIZ_PREVIEW_SLAVE_COUNT \
@@ -340,10 +409,12 @@ static void liz_preview_kick_client(Window w)
 
 /* Embeds the slave window into our window at the pane position and maps it.
  *
- * The text slave (st) is spawned with -w <our window>, so its window is born
- * as our child and the WM never manages it. The image slave (feh) has no
- * such option: it maps as a normal toplevel, and the WM tiles it -- that is
- * what makes the pane flicker between "embedded" and "tiled" under dwm.
+ * The text slave default (st) is spawned with -w <our window>, so its window
+ * is born as our child and the WM never manages it. The image slave default
+ * (feh) has no such option: it maps as a normal toplevel, and the WM tiles it
+ * -- that is what makes the pane flicker between "embedded" and "tiled" under
+ * dwm. Anything swapped in via LIZ_PREVIEW_*_ARGV lands somewhere in between
+ * and is handled the same way.
  *
  * To make the WM release a window it already manages, the window is unmapped
  * first (the WM gets an UnmapNotify and drops its client), and we wait until
@@ -507,9 +578,12 @@ static void liz_preview_spawn(liz_app* app, const liz_preview_slave* sl, const c
             if (devnull > 2)
                 close(devnull);
         }
-        /* debug: keep the slave's stderr in a log file */
-        int logfd = open("/tmp/lzaveta-preview-feh.log",
-                         O_WRONLY | O_CREAT | O_APPEND, 0644);
+        /* debug: keep the slave's stderr in a log file, one per program */
+        const char* prog = strrchr(argv[0], '/');
+        prog = prog ? prog + 1 : argv[0];
+        char logpath[128];
+        snprintf(logpath, sizeof(logpath), "/tmp/lzaveta-preview-%s.log", prog);
+        int logfd = open(logpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (logfd >= 0) {
             dup2(logfd, STDERR_FILENO);
             if (logfd > 2)

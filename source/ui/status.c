@@ -107,9 +107,19 @@ void liz_status_draw(liz_app* app)
         xc_rect(w, lx + 1, y0 + 4, 2, h - 8, liz_theme_text_dim); /* cursor */
     } else {
         char left[LIZ_FS_NAME_MAX + 128];
+        char modebuf[LIZ_VIM_QUERY_MAX + 8];
         const char* mode = "NORMAL";
-        if (app->vim.visual_active)
-            mode = app->vim.visual_line ? "VISUAL LINE" : "VISUAL";
+        if (app->vim_mode) {
+            if (app->vim.visual_active)
+                mode = app->vim.visual_line ? "VISUAL LINE" : "VISUAL";
+        } else if (app->novim_search.active && app->novim_search.query[0] != '\0') {
+            /* non-vim type-to-search: present the live query like vim's
+             * "/query" command line */
+            snprintf(modebuf, sizeof(modebuf), "/%s", app->novim_search.query);
+            mode = modebuf;
+        } else {
+            mode = "STANDARD";
+        }
         int leftlen = 0;
         if (picker)
             leftlen += snprintf(left + leftlen, sizeof(left) - (size_t)leftlen,

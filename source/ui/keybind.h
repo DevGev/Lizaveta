@@ -23,6 +23,7 @@ enum liz_action {
     LIZ_ACTION_RENAME,
     LIZ_ACTION_GO_HOME,
     LIZ_ACTION_CLOSE_PREVIEW,
+    LIZ_ACTION_DELETE,
 };
 
 #define LIZ_MOD_SHIFT 1   /* X11: ShiftMask   = 1 << 0 */

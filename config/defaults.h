@@ -43,6 +43,65 @@
 }
 #endif
 
+// Preview
+
+/* Window title (and WM_CLASS instance/class) the preview slaves are told to
+ * use; the manager matches this, plus the previewed file's basename, to find
+ * and embed the slave's window. Keep it unique-ish so two Lizaveta instances
+ * do not grab each other's preview windows. */
+#ifndef LIZ_PREVIEW_TITLE
+#define LIZ_PREVIEW_TITLE "lzaveta-preview"
+#endif
+
+/* argv templates for the embedded preview slaves. Each expands to a
+ * comma-separated list of quoted argument strings (like LIZ_PINNED). The
+ * manager substitutes these placeholders when spawning:
+ *
+ *   {geo}     pane geometry relative to lizaveta's window: WxH+X+Y
+ *   {screen}  pane geometry in screen coordinates: WxH+X+Y
+ *   {win}     lizaveta's X window id (0x...), for -w/--embed style embedding
+ *   {title}   LIZ_PREVIEW_TITLE (the marker the manager matches on)
+ *   {path}    absolute path of the file being previewed
+ *
+ * The window title/class must contain {title} or otherwise be findable by the
+ * manager, or the preview window will never be embedded. A template may use at
+ * most 15 arguments (LIZ_PREVIEW_ARGV_MAX - 1). */
+#ifndef LIZ_PREVIEW_IMAGE_ARGV
+#define LIZ_PREVIEW_IMAGE_ARGV { \
+    "feh", "-x", "-g", "{screen}", "-Z", "--no-fehbg", \
+    "--image-bg", "#212128", "--title", "{title}", "{path}", \
+}
+#endif
+
+/* Utilizes the anygeometry patch for suckless.
+ * Remove -G {geo} if you don't have the patch applied. */
+#ifndef LIZ_PREVIEW_TEXT_ARGV
+#define LIZ_PREVIEW_TEXT_ARGV { \
+    "st", "-G", "{geo}", "-n", "{title}", "-c", "{title}", \
+    "-T", "{title}", "-w", "{win}", "-e", "vim", "{path}", \
+}
+#endif
+
+// Background
+
+/* Window background opacity: 0.0 fully transparent, 1.0 fully opaque.
+ * Requires a server with an ARGB visual and a running compositor (picom,
+ * compton, ...). Below 1.0 the desktop -- and, with LIZ_BG_BLUR, a
+ * gaussian-blurred copy of it -- shows through the file list area. The
+ * chrome (nav/sidebar/status bars) keeps its opaque theme colors. */
+#ifndef LIZ_BG_OPACITY
+#define LIZ_BG_OPACITY 1.0
+#endif
+
+/* Gaussian blur behind the window, done by the compositor via the
+ * _NET_WM_BLUR_BEHIND_REGION hint. 0 disables it; any nonzero value blurs
+ * whatever is behind the window with the compositor's own blur radius (the
+ * hint carries no radius). Only visible combined with LIZ_BG_OPACITY below
+ * 1.0, and only when the compositor honors the hint. */
+#ifndef LIZ_BG_BLUR
+#define LIZ_BG_BLUR 0
+#endif
+
 // Keybindings
 
 /* The default input mode. 1 = vim mode (/ search, `:` command line, plain

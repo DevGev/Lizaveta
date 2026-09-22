@@ -2111,7 +2111,10 @@ int liz_app_init(liz_app* app)
     if (!win)
         return -1;
 #if LIZ_BG_BLUR
-    xc_set_blur_behind(win, true);
+    /* the blur hint only matters on a window that actually has an ARGB
+     * visual; the server may have fallen back to an opaque one */
+    if (win->depth == 32)
+        xc_set_blur_behind(win, true);
 #endif
     app->win = win;
     win->events = liz_app_on_event;

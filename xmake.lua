@@ -20,12 +20,22 @@ option("archives")
     set_description("Enable archive browsing support (requires libarchive)")
 option_end()
 
+option("vimmode")
+    set_default(true)
+    set_showmenu(true)
+    set_description("Use the vim input mode (on by default); disable for the non-vim type-to-search mode")
+option_end()
+
 if has_config("icons") then
     add_requires("nanosvg")
 end
 
 if has_config("archives") then
     add_requires("libarchive")
+end
+
+if not has_config("vimmode") then
+    add_defines("LIZ_VIM_MODE_DEFAULT=0")
 end
 
 local function default_prefix()
@@ -41,7 +51,7 @@ target("lizaveta")
 
     add_files("source/*.c")
     add_files("source/app/*.c")
-    add_files("source/apps/*.c")
+    add_files("source/defaults/*.c")
     add_files("source/fs/*.c")
     add_files("source/ui/*.c")
     add_files("source/dbus/*.c")

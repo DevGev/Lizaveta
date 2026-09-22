@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include "apps/apps.h"
+#include "defaults/defaults.h"
 #include "fs/fs.h"
 #include "ui/newfolder.h"
 #include "ui/rename.h"
@@ -75,7 +75,7 @@ void liz_menu_open(liz_app* app, int x, int y, int row)
             if (app->entries[row].type != LIZ_FS_DIR) {
                 char path[PATH_MAX];
                 if (liz_fs_join(path, sizeof(path), app->cwd, app->entries[row].name) == 0)
-                    m->app_count = liz_apps_candidates(path, m->apps, LIZ_APPS_MAX);
+                    m->app_count = liz_defaults_candidates(path, m->apps, LIZ_DEFAULTS_MAX);
                 if (m->app_count > 0)
                     liz_menu_add(m, LIZ_MENU_OPEN_WITH, "Open with...");
             }

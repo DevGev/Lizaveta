@@ -21,6 +21,22 @@
 // #undef LIZ_THEME_DEFAULT
 // #define LIZ_THEME_THUNAR
 
+/* Ayu Dark */
+// #undef LIZ_THEME_DEFAULT
+// #define LIZ_THEME_AYU_DARK
+
+/* Nord */
+// #undef LIZ_THEME_DEFAULT
+// #define LIZ_THEME_NORD
+
+/* Tokyo Dark */
+// #undef LIZ_THEME_DEFAULT
+// #define LIZ_THEME_TOKYO_DARK
+
+/* Everforest Dark */
+// #undef LIZ_THEME_DEFAULT
+// #define LIZ_THEME_EVERFOREST_DARK
+
 
 /* ---- Font ---------------------------------------------------------------- *
  *
@@ -53,6 +69,56 @@
 //     {"Trash",     ":trash:"             }, \
 // }
 
+
+/* ---- Background ---------------------------------------------------------- *
+ *
+ * Translucent, gaussian-blurred background (frosted glass). LIZ_BG_OPACITY
+ * is 0.0..1.0; below 1.0 the file list area becomes translucent so the
+ * desktop shows through. LIZ_BG_BLUR set to 1 makes the compositor blur
+ * what's behind the window. Both need an ARGB-capable server, a running
+ * compositor, and the compositor honoring _NET_WM_BLUR_BEHIND_REGION
+ * (picom, compton, ...).
+ */
+
+// #undef LIZ_BG_OPACITY
+// #define LIZ_BG_OPACITY 0.8
+
+// #undef LIZ_BG_BLUR
+// #define LIZ_BG_BLUR 1
+
+/* ---- Preview ------------------------------------------------------------- *
+ *
+ * The embedded preview pane spawns separate programs for images and text.
+ * Each template is a comma-separated argv list (like LIZ_PINNED); placeholders
+ * are substituted at spawn time:
+ *
+ *   {geo}     pane geometry relative to lizaveta's window: WxH+X+Y
+ *   {screen}  pane geometry in screen coordinates: WxH+X+Y
+ *   {win}     lizaveta's X window id (0x...) for -w/--embed embedding
+ *   {title}   the marker title (LIZ_PREVIEW_TITLE) used to find/embed the window
+ *   {path}    the file being previewed
+ *
+ * The spawned program must let the manager find its window: either honor a
+ * fixed title/class containing {title}, or title the window with the file
+ * basename (the fallback the manager matches). Max 15 arguments per template.
+ */
+
+/* Marker title/class the manager matches on to find the preview window. */
+// #undef LIZ_PREVIEW_TITLE
+// #define LIZ_PREVIEW_TITLE "lzaveta-preview"
+
+/* Images: swap feh for another viewer. Example: sxiv */
+// #undef LIZ_PREVIEW_IMAGE_ARGV
+// #define LIZ_PREVIEW_IMAGE_ARGV { \
+//     "sxiv", "-z", "-g", "{screen}", "-t", "{title}", "{path}", \
+// }
+
+/* Text: swap st+vim for another terminal+editor. Example: kitty with vim */
+// #undef LIZ_PREVIEW_TEXT_ARGV
+// #define LIZ_PREVIEW_TEXT_ARGV { \
+//     "kitty", "--class", "{title}", "--title", "{title}", \
+//     "--embed", "{win}", "--hold", "vim", "{path}", \
+// }
 
 /* ---- Keybindings --------------------------------------------------------- *
  *

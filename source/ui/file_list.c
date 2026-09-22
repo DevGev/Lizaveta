@@ -215,9 +215,14 @@ void liz_list_draw(liz_app* app)
         if (row == app->selected)
             f = app->font_bold;
 
-        if (app->vim.search_active && app->vim.search_query[0] != '\0') {
-            int qlen = (int)strlen(app->vim.search_query);
-            liz_list_draw_search_hl(w, f, e->name, namelen, app->vim.search_query, qlen,
+        /* highlight the active search query, whether it comes from vim mode
+         * (/) or the non-vim type-to-search */
+        bool vim_hit = app->vim.search_active && app->vim.search_query[0] != '\0';
+        bool novim_hit = app->novim_search.active && app->novim_search.query[0] != '\0';
+        if (vim_hit || novim_hit) {
+            const char* query = vim_hit ? app->vim.search_query : app->novim_search.query;
+            int qlen = (int)strlen(query);
+            liz_list_draw_search_hl(w, f, e->name, namelen, query, qlen,
                                     text_x, y, max_name_w);
         }
 
