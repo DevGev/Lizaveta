@@ -32,6 +32,10 @@ you have to run `xmake clean` before recompiling for the changes to propegate.
 xmake clean && xmake
 ```
 
+## Themes
+Lizaveta ships with support for multiple built-in themes. \
+See the [theme gallery](meta/themes/README.md) for a preview of every theme.
+
 ## Screenshots
 Image preview embedded in Lizaveta via `feh`. \
 Runs as a seperate process, embedded using Xlib.
